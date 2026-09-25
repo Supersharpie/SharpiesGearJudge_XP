@@ -3,10 +3,22 @@ on:
   release:
     types: [published]
 
+permissions:
+  contents: write # lets the packager attach the zip to the GitHub release
+
 jobs:
   package:
     runs-on: ubuntu-latest
     steps:
+      - name: Check CurseForge token
+        env:
+          CF_API_KEY: ${{ secrets.CURSEFORGE_TOKEN }}
+        run: |
+          if [ -z "$CF_API_KEY" ]; then
+            echo "::error::The CURSEFORGE_TOKEN repository secret is missing or empty, so nothing would be uploaded to CurseForge."
+            exit 1
+          fi
+
       - name: Checkout Code
         uses: actions/checkout@v5
         with:

@@ -1,0 +1,5 @@
+package-as: SharpiesGearJudge_XP
+
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
