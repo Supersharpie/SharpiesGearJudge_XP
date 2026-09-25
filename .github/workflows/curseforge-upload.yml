@@ -1,0 +1,121 @@
+name: Upload to CurseForge
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Release Type (release, beta, alpha)'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - beta
+          - alpha
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Package Addon (Zip)
+        run: |
+          # Create a folder with the addon's exact name
+          mkdir -p SharpiesGearJudge_XP
+          
+          # Copy your addon files into the folder. 
+          # Modify these cp commands if you have specific folders to exclude or include!
+          cp *.lua *.toc *.xml SharpiesGearJudge_XP/ 2>/dev/null || true
+          cp -r Media/ Fonts/ SharpiesGearJudge_XP/ 2>/dev/null || true
+          
+          # Zip the folder
+          zip -r SharpiesGearJudge_XP.zip SharpiesGearJudge_XP/
+
+      - name: Upload to CurseForge
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          PROJECT_ID: "1703196"
+          RELEASE_TYPE: ${{ github.event.inputs.release_type || 'release' }}
+        run: |
+          echo "Preparing upload for project $PROJECT_ID..."
+          
+          # --- Auto-detect Game Versions from .toc file ---
+          GAME_VERSIONS_JSON="[]"
+          # Find the first .toc file in the repository root
+          TOC_FILE=$(ls *.toc 2>/dev/null | head -n 1)
+          
+          if [ -n "$TOC_FILE" ]; then
+            echo "Found TOC file: $TOC_FILE"
+            # Extract all numbers from the '## Interface:' line
+            # E.g. '## Interface: 110005' -> '110005'
+            INTERFACE_VALS=$(grep -i "^## Interface:" "$TOC_FILE" | grep -o -E "[0-9]+")
+            
+            VERSIONS_ARRAY=()
+            for VAL in $INTERFACE_VALS; do
+              # Convert WoW interface number to semantic version (e.g. 110005 -> 11.0.5)
+              MAJOR=$((VAL / 10000))
+              MINOR=$(((VAL % 10000) / 100))
+              PATCH=$((VAL % 100))
+              VERSIONS_ARRAY+=("\"$MAJOR.$MINOR.$PATCH\"")
+            done
+            
+            if [ ${#VERSIONS_ARRAY[@]} -gt 0 ]; then
+              GAME_VERSIONS_JSON=$(IFS=,; echo "[${VERSIONS_ARRAY[*]}]")
+              echo "Detected game versions: $GAME_VERSIONS_JSON"
+            fi
+          fi
+          
+          if [ "$GAME_VERSIONS_JSON" = "[]" ]; then
+            echo "Warning: Could not detect game version from .toc, defaulting to 11.0.5"
+            GAME_VERSIONS_JSON='["11.0.5"]'
+          fi
+          
+          # --- Parse the latest release notes from CHANGELOG.md ---
+          # This extracts text from the first '## ' heading down to the next '## ' heading.
+          if [ -f "CHANGELOG.md" ]; then
+            CHANGELOG=$(awk '/^## / { if (p) exit; p=1; print; next } p { print }' CHANGELOG.md)
+            
+            # If the parser didn't find any '## ' headers, fallback to the entire file
+            if [ -z "$CHANGELOG" ]; then
+              CHANGELOG=$(cat CHANGELOG.md)
+            fi
+          else
+            CHANGELOG="New release"
+          fi
+          
+          # Escape quotes and newlines for JSON
+          CHANGELOG_JSON=$(echo "$CHANGELOG" | jq -Rsa .)
+          
+          # Construct the metadata JSON
+          cat <<EOF > metadata.json
+          {
+            "changelog": $CHANGELOG_JSON,
+            "changelogType": "markdown",
+            "releaseType": "$RELEASE_TYPE",
+            "gameVersionNames": $GAME_VERSIONS_JSON
+          }
+          EOF
+          
+          echo "Metadata:"
+          cat metadata.json
+          
+          # Perform the multipart/form-data POST request
+          HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST \
+            "https://wow.curseforge.com/api/projects/$PROJECT_ID/upload-file" \
+            -H "x-api-token: $CF_API_TOKEN" \
+            -F "metadata=<metadata.json" \
+            -F "file=@SharpiesGearJudge_XP.zip")
+          
+          echo "HTTP Status: $HTTP_STATUS"
+          cat response.json
+          
+          if [ "$HTTP_STATUS" -ne 200 ] && [ "$HTTP_STATUS" -ne 201 ]; then
+            echo "Upload failed!"
+            exit 1
+          else
+            echo "Upload successful!"
+          fi
