@@ -9,6 +9,13 @@ A lightweight, visually dynamic experience bar plugin built natively for **Sharp
 - **Precision Tooltips**: Hovering over the experience bar provides precise mathematical data, including current XP, XP remaining to level, and exact Rested XP values.
 - **Native Integration**: Seamlessly ties into the core SharpiesGearJudge module for a cohesive HUD experience.
 
+### ⚔️ Gear-Aware Leveling
+- **Upgrades Waiting in Your Bags**: See which bag items SGJ rates as upgrades once you reach their level. The next one shows as an icon at the end of the bar.
+- **Level-Up Gear Alert**: A "Ding!" alert lists the upgrades you can equip now and any unspent talent points.
+- **Stat Weight Change Warning**: A heads-up before your leveling weight profile changes, with the stats that shift the most.
+- **Quest Turn-In Projection**: A gold section on the bar shows where your completed quests will take you, and which of them reward an upgrade.
+- **Gear Score Tracking**: Your SGJ character score and how much it has grown this level.
+
 ## ⚙️ Installation
 
 1. Ensure the core **SharpiesGearJudge** addon is installed.

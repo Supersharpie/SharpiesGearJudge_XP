@@ -4,17 +4,66 @@
 
 local addonName, _ = ...
 
+-- Container API moved to C_Container on newer clients
+local GetContainerNumSlots = C_Container and C_Container.GetContainerNumSlots or GetContainerNumSlots
+local GetContainerItemLink = C_Container and C_Container.GetContainerItemLink or GetContainerItemLink
+
 -- 1. Session State Variables
 local sessionStartTime = 0
+local sessionStarted = false
 local totalXPGainedSession = 0
 local lastXP = 0
+local lastMaxXP = 1
+local lastRested = 0
 
 -- Specific Tracking
 local killCount = 0
 local killXPTotal = 0
+local killBaseXPTotal = 0 -- Kill XP with the rested bonus stripped out
 
 local questCount = 0
 local questXPTotal = 0
+
+-- Gear Judge Integration State
+local lockedUpgrades = {}   -- Bag upgrades you're too low level to equip
+local readyQuests = { count = 0, xp = 0, upgrades = 0, hasXPData = false }
+local bandShift = nil       -- Upcoming leveling weight-band change
+local gearScore = nil       -- Current character score from the main addon
+
+local function GetMaxLevel()
+    if GetMaxPlayerLevel then return GetMaxPlayerLevel() end
+    return 60
+end
+
+local function IsAtMaxLevel()
+    return UnitLevel("player") >= GetMaxLevel()
+end
+
+local function GetCharKey()
+    return (UnitName("player") or "?") .. "-" .. (GetRealmName() or "?")
+end
+
+-- Main addon (MSC) is a hard dependency, but it may not have weights until it finishes initializing
+local function GetJudgeWeights()
+    local MSC = _G.MSC
+    if not MSC or not MSC.GetCurrentWeights then return nil end
+    local ok, weights, specKey = pcall(MSC.GetCurrentWeights)
+    if not ok or not weights then return nil end
+    return weights, specKey
+end
+
+-- Builds a Lua pattern from a Blizzard format string (e.g. COMBATLOG_XPGAIN_FIRSTPERSON), so parsing works in every locale
+local function FormatToPattern(fmt)
+    if not fmt or fmt == "" then return nil end
+    local p = fmt:gsub("([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1")
+    p = p:gsub("%%%%%d%%%$s", "(.-)"):gsub("%%%%%d%%%$d", "(%%d+)") -- Positional (%1$s)
+    p = p:gsub("%%%%s", "(.-)"):gsub("%%%%d", "(%%d+)")
+    return "^" .. p
+end
+
+local KILL_PATTERN = FormatToPattern(COMBATLOG_XPGAIN_FIRSTPERSON) or "^(.-) dies, you gain (%d+) experience"
+local QUEST_PATTERN = FormatToPattern(ERR_QUEST_REWARD_EXP_I) or "^Experience gained: (%d+)"
+local useTurnedInEvent = false
 
 -- Global function to reset the tracker
 function SGJ_ResetXPSession()
@@ -22,6 +71,7 @@ function SGJ_ResetXPSession()
     totalXPGainedSession = 0
     killCount = 0
     killXPTotal = 0
+    killBaseXPTotal = 0
     questCount = 0
     questXPTotal = 0
     print("|cffa335ee[SGJ XP]|r Session Tracker Reset.")
@@ -52,9 +102,16 @@ SGJ_XP.RestedBar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
 SGJ_XP.RestedBar:GetStatusBarTexture():SetHorizTile(false)
 SGJ_XP.RestedBar:SetFrameLevel(SGJ_XP:GetFrameLevel() + 1)
 
+-- Quest turn-in projection: where the bar lands if you hand in every completed quest
+SGJ_XP.QuestBar = CreateFrame("StatusBar", nil, SGJ_XP)
+SGJ_XP.QuestBar:SetAllPoints()
+SGJ_XP.QuestBar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+SGJ_XP.QuestBar:GetStatusBarTexture():SetHorizTile(false)
+SGJ_XP.QuestBar:SetFrameLevel(SGJ_XP.RestedBar:GetFrameLevel() + 1)
+
 SGJ_XP.Bar = CreateFrame("StatusBar", nil, SGJ_XP)
 SGJ_XP.Bar:SetAllPoints()
-SGJ_XP.Bar:SetFrameLevel(SGJ_XP.RestedBar:GetFrameLevel() + 1)
+SGJ_XP.Bar:SetFrameLevel(SGJ_XP.QuestBar:GetFrameLevel() + 1)
 SGJ_XP.Bar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
 SGJ_XP.Bar:GetStatusBarTexture():SetHorizTile(false)
 
@@ -64,9 +121,26 @@ SGJ_XP.Text:SetPoint("CENTER", SGJ_XP.Bar, "CENTER", 0, 0)
 SGJ_XP.Text:SetShadowColor(0, 0, 0, 1)
 SGJ_XP.Text:SetShadowOffset(1, -1)
 
+-- 4b. Unlock Marker: icon of the best upgrade that unlocks at the next level
+SGJ_XP.Unlock = CreateFrame("Frame", nil, SGJ_XP, "BackdropTemplate")
+SGJ_XP.Unlock:SetPoint("LEFT", SGJ_XP, "RIGHT", 4, 0)
+SGJ_XP.Unlock:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+SGJ_XP.Unlock:SetBackdropBorderColor(0.1, 1, 0.1, 1)
+SGJ_XP.Unlock:EnableMouse(true)
+SGJ_XP.Unlock.Icon = SGJ_XP.Unlock:CreateTexture(nil, "ARTWORK")
+SGJ_XP.Unlock.Icon:SetPoint("TOPLEFT", 1, -1)
+SGJ_XP.Unlock.Icon:SetPoint("BOTTOMRIGHT", -1, 1)
+SGJ_XP.Unlock.Icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+SGJ_XP.Unlock.Arrow = SGJ_XP.Unlock:CreateTexture(nil, "OVERLAY")
+SGJ_XP.Unlock.Arrow:SetSize(12, 12)
+SGJ_XP.Unlock.Arrow:SetPoint("TOPRIGHT", 3, 3)
+SGJ_XP.Unlock.Arrow:SetTexture("Interface\\AddOns\\SharpiesGearJudge\\Textures\\Upgrade.png")
+SGJ_XP.Unlock:Hide()
+
 -- 5. Create the Standalone Stats Box
+local STATS_BOX_WIDTH = 300
 local SGJ_Stats = CreateFrame("Frame", "SGJ_XPStatsBox", UIParent, "BackdropTemplate")
-SGJ_Stats:SetSize(240, 160) -- Wider and taller to match a tooltip
+SGJ_Stats:SetSize(STATS_BOX_WIDTH, 215) -- Height follows the number of lines shown
 SGJ_Stats:SetPoint("BOTTOMRIGHT", -50, 150)
 SGJ_Stats:EnableMouse(true)
 SGJ_Stats:SetMovable(true)
@@ -74,9 +148,9 @@ SGJ_Stats:RegisterForDrag("LeftButton")
 
 -- Tooltip-style Background
 SGJ_Stats:SetBackdrop({
-    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background", 
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", 
-    tile = true, tileSize = 16, edgeSize = 16, 
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    tile = true, tileSize = 16, edgeSize = 16,
     insets = { left = 4, right = 4, top = 4, bottom = 4 }
 })
 SGJ_Stats:SetBackdropColor(0, 0, 0, 0.8)
@@ -86,31 +160,23 @@ SGJ_Stats.Title = SGJ_Stats:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 SGJ_Stats.Title:SetPoint("TOP", 0, -10)
 SGJ_Stats.Title:SetText("SGJ Experience")
 
--- Helper function to create Tooltip-style Double Lines
-local function CreateDoubleLine(yOffset)
-    local left = SGJ_Stats:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    left:SetPoint("TOPLEFT", 10, yOffset)
-    left:SetJustifyH("LEFT")
-    
-    local right = SGJ_Stats:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    right:SetPoint("TOPRIGHT", -10, yOffset)
-    right:SetJustifyH("RIGHT")
-    
-    return left, right
+-- Tooltip-style double-line rows, created as needed (the box shows the same lines as the bar's tooltip)
+SGJ_Stats.Lines = {}
+local function GetStatsRow(i)
+    if not SGJ_Stats.Lines[i] then
+        local left = SGJ_Stats:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        left:SetJustifyH("LEFT")
+        left:SetWordWrap(false)
+
+        local right = SGJ_Stats:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        right:SetJustifyH("RIGHT")
+        right:SetWordWrap(false)
+
+        SGJ_Stats.Lines[i] = { left, right }
+    end
+    return SGJ_Stats.Lines[i][1], SGJ_Stats.Lines[i][2]
 end
 
--- Create the rows (Spacing them out visually like the tooltip)
-SGJ_Stats.Lines = {}
-SGJ_Stats.Lines[1] = {CreateDoubleLine(-30)} -- Current XP
-SGJ_Stats.Lines[2] = {CreateDoubleLine(-45)} -- Remaining
--- Blank space (-60)
-SGJ_Stats.Lines[3] = {CreateDoubleLine(-70)} -- Session Time
-SGJ_Stats.Lines[4] = {CreateDoubleLine(-85)} -- Overall XP/Hr
-SGJ_Stats.Lines[5] = {CreateDoubleLine(-100)} -- Time to Level
--- Blank space (-115)
-SGJ_Stats.Lines[6] = {CreateDoubleLine(-125)} -- Kills
-SGJ_Stats.Lines[7] = {CreateDoubleLine(-140)} -- Quests
-
 SGJ_Stats:SetScript("OnDragStart", function(self) if not SGJ_XP_DB.XPBarLocked and not InCombatLockdown() then self:StartMoving() end end)
 SGJ_Stats:SetScript("OnDragStop", function(self)
     self:StopMovingOrSizing()
@@ -118,51 +184,77 @@ SGJ_Stats:SetScript("OnDragStop", function(self)
     SGJ_XP_DB.StatsBoxPosition = {point, relativePoint, xOfs, yOfs}
 end)
 
--- Create 7 lines for rich data display
-SGJ_Stats.L1 = SGJ_Stats:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"); SGJ_Stats.L1:SetPoint("TOPLEFT", 10, -28)
-SGJ_Stats.L2 = SGJ_Stats:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"); SGJ_Stats.L2:SetPoint("TOPLEFT", 10, -43)
-SGJ_Stats.L3 = SGJ_Stats:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"); SGJ_Stats.L3:SetPoint("TOPLEFT", 10, -58)
-SGJ_Stats.L4 = SGJ_Stats:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"); SGJ_Stats.L4:SetPoint("TOPLEFT", 10, -78) -- Extra gap for readability
-SGJ_Stats.L5 = SGJ_Stats:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"); SGJ_Stats.L5:SetPoint("TOPLEFT", 10, -93)
-SGJ_Stats.L6 = SGJ_Stats:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"); SGJ_Stats.L6:SetPoint("TOPLEFT", 10, -108)
-SGJ_Stats.L7 = SGJ_Stats:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"); SGJ_Stats.L7:SetPoint("TOPLEFT", 10, -123)
-
-SGJ_Stats:SetScript("OnDragStart", function(self) if not SGJ_XP_DB.XPBarLocked and not InCombatLockdown() then self:StartMoving() end end)
-SGJ_Stats:SetScript("OnDragStop", function(self)
-    self:StopMovingOrSizing()
-    local point, _, relativePoint, xOfs, yOfs = self:GetPoint()
-    SGJ_XP_DB.StatsBoxPosition = {point, relativePoint, xOfs, yOfs}
+-- Shift-Click to Reset (same as the bar)
+SGJ_Stats:SetScript("OnMouseUp", function(self, button)
+    if button == "LeftButton" and IsShiftKeyDown() then
+        SGJ_ResetXPSession()
+    end
 end)
+
+-- 6. Level-Up Alert ("Ding!" gear check)
+local SGJ_Ding = CreateFrame("Button", "SGJ_XPDingAlert", UIParent, "BackdropTemplate")
+SGJ_Ding:SetSize(320, 60)
+SGJ_Ding:SetPoint("BOTTOM", SGJ_XP, "TOP", 0, 12)
+SGJ_Ding:SetFrameStrata("HIGH")
+SGJ_Ding:SetBackdrop({
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    tile = true, tileSize = 16, edgeSize = 16,
+    insets = { left = 4, right = 4, top = 4, bottom = 4 }
+})
+SGJ_Ding:SetBackdropColor(0, 0, 0, 0.9)
+SGJ_Ding:SetBackdropBorderColor(1, 0.82, 0, 1)
+SGJ_Ding.Title = SGJ_Ding:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+SGJ_Ding.Title:SetPoint("TOP", 0, -10)
+SGJ_Ding.Body = SGJ_Ding:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+SGJ_Ding.Body:SetPoint("TOP", SGJ_Ding.Title, "BOTTOM", 0, -6)
+SGJ_Ding.Body:SetWidth(300)
+SGJ_Ding.Body:SetJustifyH("CENTER")
+SGJ_Ding.Hint = SGJ_Ding:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+SGJ_Ding.Hint:SetPoint("BOTTOM", 0, 8)
+SGJ_Ding.Hint:SetText("Click to open bags  -  Right-click to dismiss")
+SGJ_Ding:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+SGJ_Ding:SetScript("OnClick", function(self, button)
+    if button == "LeftButton" then
+        if OpenAllBags then OpenAllBags() end
+    end
+    self:Hide()
+end)
+SGJ_Ding:Hide()
 
 -- === Milestone Ticks Engine ===
 SGJ_XP.TickFrames = {}
 local function UpdateTicks()
     if not SGJ_XP then return end
-    
+
     local width = SGJ_XP:GetWidth()
     local height = SGJ_XP:GetHeight()
     local numSegments = 20 -- Classic WoW uses 20 bubbles/brackets per level
     local step = width / numSegments
-    
+
     for i = 1, numSegments - 1 do
         if not SGJ_XP.TickFrames[i] then
             local t = SGJ_XP.Bar:CreateTexture(nil, "OVERLAY")
-            t:SetWidth(1) 
+            t:SetWidth(1)
             SGJ_XP.TickFrames[i] = t
         end
-        
+
         local tick = SGJ_XP.TickFrames[i]
         tick:SetColorTexture(unpack(SGJ_XP_DB.TickColor))
         tick:SetHeight(height)
         tick:ClearAllPoints()
         tick:SetPoint("LEFT", SGJ_XP.Bar, "LEFT", step * i, 0)
-        
+
         if SGJ_XP_DB and SGJ_XP_DB.ShowTicks then
             tick:Show()
         else
             tick:Hide()
         end
     end
+
+    -- Keep the unlock marker square with the bar
+    local size = math.max(12, math.min(28, height))
+    SGJ_XP.Unlock:SetSize(size, size)
 end
 
 -- Safely opens the WoW Color Picker across different client versions
@@ -170,17 +262,17 @@ local function OpenColorPicker(defaultR, defaultG, defaultB, defaultA, callback)
     local function OnColorChanged()
         local r, g, b = ColorPickerFrame:GetColorRGB()
         local a = defaultA
-        
+
         -- Safely grab Alpha depending on which WoW Engine is running
         if ColorPickerFrame.HasOpacity then
             a = ColorPickerFrame:GetColorAlpha()
         elseif OpacitySliderFrame then
             a = OpacitySliderFrame:GetValue()
         end
-        
+
         -- Fallback just in case Blizzard returns nil
-        if not a then a = 1.0 end 
-        
+        if not a then a = 1.0 end
+
         callback(r, g, b, a)
     end
 
@@ -218,7 +310,7 @@ end
 -- Function to handle the default Blizzard Bar safely across client versions
 local function UpdateBlizzardBarVisibility()
     if not SGJ_XP_DB then return end
-    
+
     -- Modern Client Backend (Dragonflight / TBC Anniversary)
     if StatusTrackingBarManager then
         if SGJ_XP_DB.HideBlizzardXP then
@@ -226,7 +318,7 @@ local function UpdateBlizzardBarVisibility()
         else
             StatusTrackingBarManager:Show()
         end
-        
+
     -- Older Client Backend (Fallback)
     elseif MainMenuExpBar then
         if SGJ_XP_DB.HideBlizzardXP then
@@ -256,17 +348,234 @@ end
 local function TrackXPGains()
     local currentXP = UnitXP("player") or 0
     local maxXP = UnitXPMax("player") or 1
-    
+
     if currentXP > lastXP then
         local gained = currentXP - lastXP
         totalXPGainedSession = totalXPGainedSession + gained
     elseif currentXP < lastXP then
-        -- The player leveled up
-        local gained = (maxXP - lastXP) + currentXP
+        -- The player leveled up: finish the old level using ITS max, not the new one
+        local gained = (lastMaxXP - lastXP) + currentXP
         totalXPGainedSession = totalXPGainedSession + gained
     end
-    
+
     lastXP = currentXP
+    lastMaxXP = maxXP
+end
+
+-- ============================================================================
+-- Gear Judge Integration
+-- ============================================================================
+
+-- Runs fn after `delay` seconds, restarting the countdown if called again first
+local debounceTimers = {}
+local function Debounce(key, delay, fn)
+    if debounceTimers[key] then debounceTimers[key]:Cancel() end
+    debounceTimers[key] = C_Timer.NewTimer(delay, function()
+        debounceTimers[key] = nil
+        fn()
+    end)
+end
+
+-- Armor subclass each class trains at 40 (3 = Mail, 4 = Plate). The main addon's usable check treats
+-- level 40 as "trained", so looking ahead from below 40 needs its own check.
+local ARMOR_TRAINED_AT_40 = { WARRIOR = 4, PALADIN = 4, SHAMAN = 3, HUNTER = 3 }
+
+-- Returns the score gain if SGJ judges `link` an upgrade, else nil.
+-- `assumeUsable` skips the usable check for armor you'll train later.
+local function GetUpgradeDelta(link, weights, specKey, assumeUsable)
+    local MSC = _G.MSC
+    local itemName, _, _, _, _, _, _, _, equipLoc = GetItemInfo(link)
+    if not itemName or not equipLoc or equipLoc == "" or equipLoc == "INVTYPE_NON_EQUIP" then return nil end
+    if not assumeUsable and not MSC.IsItemUsable(link) then return nil end
+    local compSlot = MSC.GetComparisonSlot(link, equipLoc, weights, specKey)
+    if not compSlot then return nil end
+    local newScore, oldScore = MSC:EvaluateUpgrade(link, compSlot, weights, specKey)
+    if newScore and oldScore and newScore > (oldScore + 0.1) then
+        return newScore - oldScore
+    end
+    return nil
+end
+
+-- Scans bags for upgrades with a level requirement above `fromLevel`.
+-- Items you can now equip go in `ready`, the rest in `locked`. Both sorted soonest / biggest first.
+local function ScanBagUpgrades(fromLevel)
+    local locked, ready = {}, {}
+    local weights, specKey = GetJudgeWeights()
+    if not weights then return locked, ready end
+    local level = UnitLevel("player")
+    local _, playerClass = UnitClass("player")
+    local trainedArmor = ARMOR_TRAINED_AT_40[playerClass]
+
+    for bag = 0, (NUM_BAG_SLOTS or 4) do
+        for slot = 1, (GetContainerNumSlots(bag) or 0) do
+            local link = GetContainerItemLink(bag, slot)
+            if link then
+                local _, _, _, _, minLevel, _, subTypeName, _, _, icon, _, classID, subClassID = GetItemInfo(link)
+                -- Mail/Plate you can't wear until you train it at 40 unlocks at 40, whatever its own requirement
+                local needsTraining = trainedArmor and fromLevel < 40 and classID == 4 and subClassID == trainedArmor
+                local unlockLevel = minLevel and (needsTraining and math.max(minLevel, 40) or minLevel)
+                if unlockLevel and unlockLevel > fromLevel then
+                    local ok, delta = pcall(GetUpgradeDelta, link, weights, specKey, needsTraining and level < 40)
+                    if ok and delta then
+                        local entry = { link = link, icon = icon, minLevel = unlockLevel, delta = delta }
+                        if needsTraining then entry.train = subTypeName end
+                        table.insert(unlockLevel <= level and ready or locked, entry)
+                    end
+                end
+            end
+        end
+    end
+
+    local function Sort(a, b)
+        if a.minLevel ~= b.minLevel then return a.minLevel < b.minLevel end
+        return a.delta > b.delta
+    end
+    table.sort(locked, Sort)
+    table.sort(ready, Sort)
+    return locked, ready
+end
+
+-- Finds the leveling weight band you're about to move into (within 2 levels) and what changes.
+-- Uses the class's raw LevelingWeights, so it's a preview: talents and caps still adjust the final numbers.
+local function GetUpcomingBandShift()
+    local MSC = _G.MSC
+    local cls = MSC and MSC.CurrentClass
+    if not cls or not cls.LevelingWeights then return nil end
+    local _, specKey = GetJudgeWeights()
+    if type(specKey) ~= "string" then return nil end
+
+    local prefix, hi = specKey:match("^(.-)_%d+_(%d+)$")
+    if not prefix or not cls.LevelingWeights[specKey] then return nil end
+    hi = tonumber(hi)
+
+    local levelsAway = (hi + 1) - UnitLevel("player")
+    if levelsAway < 1 or levelsAway > 2 then return nil end
+
+    local nextKey
+    for key in pairs(cls.LevelingWeights) do
+        local p, lo = key:match("^(.-)_(%d+)_%d+$")
+        if p == prefix and tonumber(lo) == hi + 1 then nextKey = key; break end
+    end
+    if not nextKey then
+        -- Some chains change name between bands (Paladin DPS: Leveling_41_51 -> Leveling_Ret_52_59).
+        -- Use the profile that starts at the next band without continuing a chain of its own.
+        local candidates = {}
+        for key in pairs(cls.LevelingWeights) do
+            local p, lo = key:match("^(.-)_(%d+)_%d+$")
+            if p and tonumber(lo) == hi + 1 then
+                local continuesChain = false
+                for other in pairs(cls.LevelingWeights) do
+                    local op, ohi = other:match("^(.-)_%d+_(%d+)$")
+                    if op == p and tonumber(ohi) == hi then continuesChain = true; break end
+                end
+                if not continuesChain then table.insert(candidates, key) end
+            end
+        end
+        if #candidates == 1 then nextKey = candidates[1] end
+    end
+    if not nextKey then return nil end
+
+    local cur, nxt = cls.LevelingWeights[specKey], cls.LevelingWeights[nextKey]
+    local changes, seen = {}, {}
+    local function Compare(stat)
+        if seen[stat] then return end
+        seen[stat] = true
+        local a, b = cur[stat] or 0, nxt[stat] or 0
+        if a ~= b then
+            table.insert(changes, { stat = stat, from = a, to = b, rel = math.abs(b - a) / math.max(a, b) })
+        end
+    end
+    for stat in pairs(cur) do Compare(stat) end
+    for stat in pairs(nxt) do Compare(stat) end
+    if #changes == 0 then return nil end -- Some bands are copies of the last; nothing to warn about
+    table.sort(changes, function(x, y) return x.rel > y.rel end)
+
+    local pretty = (MSC.PrettyNames and MSC.PrettyNames[nextKey]) or (cls.PrettyNames and cls.PrettyNames[nextKey]) or nextKey
+    return { levelsAway = levelsAway, level = hi + 1, name = pretty, changes = changes }
+end
+
+local function FormatWeightChange(c)
+    local name = _G.MSC.GetCleanStatName(c.stat)
+    if c.to == 0 then return name .. ": |cffff5555no longer valued|r" end
+    if c.from == 0 then return name .. ": |cff55ff55now valued|r (" .. c.to .. ")" end
+    local color = (c.to > c.from) and "|cff55ff55" or "|cffff5555"
+    return string.format("%s: %s -> %s%s|r", name, c.from, color, c.to)
+end
+
+-- Sums completed quests in the log: XP (when the client exposes it) and rewards SGJ judges as upgrades.
+-- Quests under collapsed headers aren't visible to the API, so they're skipped.
+local lastQuestScanEnd = 0
+local function ScanReadyQuests()
+    local result = { count = 0, xp = 0, upgrades = 0, hasXPData = false }
+    if not GetNumQuestLogEntries or not GetQuestLogTitle then return result end
+    local weights, specKey = GetJudgeWeights()
+
+    local prevSelection = GetQuestLogSelection and GetQuestLogSelection() or 0
+    local numEntries = GetNumQuestLogEntries()
+    for i = 1, numEntries do
+        local _, _, _, isHeader, _, isComplete = GetQuestLogTitle(i)
+        if not isHeader and isComplete == 1 then
+            result.count = result.count + 1
+            SelectQuestLogEntry(i)
+
+            if GetQuestLogRewardXP then
+                local ok, xp = pcall(GetQuestLogRewardXP)
+                if ok and xp then
+                    result.xp = result.xp + xp
+                    result.hasXPData = true
+                end
+            end
+
+            -- A choice counts once even if several choices are upgrades
+            if weights then
+                local hasUpgrade = false
+                for _, rewardType in ipairs({ "choice", "reward" }) do
+                    local num = (rewardType == "choice") and GetNumQuestLogChoices() or GetNumQuestLogRewards()
+                    for j = 1, (num or 0) do
+                        local link = GetQuestLogItemLink(rewardType, j)
+                        if link then
+                            local ok, delta = pcall(GetUpgradeDelta, link, weights, specKey)
+                            if ok and delta then hasUpgrade = true end
+                        end
+                    end
+                end
+                if hasUpgrade then result.upgrades = result.upgrades + 1 end
+            end
+        end
+    end
+    SelectQuestLogEntry(prevSelection)
+    lastQuestScanEnd = GetTime()
+    return result
+end
+
+local function RefreshGearScore()
+    local MSC = _G.MSC
+    local weights, specKey = GetJudgeWeights()
+    if not weights or not MSC.GetEquippedGear or not MSC.GetCachedCharacterScore then return end
+    local ok, score = pcall(function()
+        return MSC:GetCachedCharacterScore(MSC:GetEquippedGear(), weights, specKey)
+    end)
+    if not ok or not score then return end
+    gearScore = score
+
+    -- Per-level log. Re-baselines when the weight profile changes so the delta never compares two scales.
+    SGJ_XP_DB.ScoreLog = SGJ_XP_DB.ScoreLog or {}
+    local charKey = GetCharKey()
+    SGJ_XP_DB.ScoreLog[charKey] = SGJ_XP_DB.ScoreLog[charKey] or {}
+    local level = UnitLevel("player")
+    local entry = SGJ_XP_DB.ScoreLog[charKey][level]
+    if not entry or entry.spec ~= specKey then
+        entry = { start = score, spec = specKey }
+        SGJ_XP_DB.ScoreLog[charKey][level] = entry
+    end
+    entry.last = score
+end
+
+local function GetGearScoreGainThisLevel()
+    local log = SGJ_XP_DB.ScoreLog and SGJ_XP_DB.ScoreLog[GetCharKey()]
+    local entry = log and log[UnitLevel("player")]
+    if not entry or not entry.last then return 0 end
+    return entry.last - entry.start
 end
 
 -- Calculates all tracking math so both the tooltip and the Box can use it
@@ -274,10 +583,10 @@ local function GetXPData()
     local currentXP = UnitXP("player") or 0
     local maxXP = UnitXPMax("player") or 1
     local remainingXP = maxXP - currentXP
-    
-    local timePlayed = (GetTime() - sessionStartTime) / 3600 
+
+    local timePlayed = (GetTime() - sessionStartTime) / 3600
     local xpPerHour = (timePlayed > 0) and (totalXPGainedSession / timePlayed) or 0
-    
+
     local timeToLevelStr = "Need data..."
     if xpPerHour > 0 then
         local hoursToLevel = remainingXP / xpPerHour
@@ -296,71 +605,176 @@ local function GetXPData()
     return currentXP, maxXP, remainingXP, xpPerHour, timeToLevelStr, avgKillXP, killsToLevel, avgQuestXP, questsToLevel, timePlayed
 end
 
+-- Rested XP doubles kill XP until the pool is spent, so it covers 2x its size in earned XP
+local function GetRestedPlan(remainingXP)
+    local restedXP = GetXPExhaustion() or 0
+    if restedXP <= 0 then return nil end
+    local coverage = (remainingXP > 0) and math.min(1, (restedXP * 2) / remainingXP) or 0
+    local avgBase = (killCount > 0) and (killBaseXPTotal / killCount) or 0
+    local kills = (avgBase > 0) and math.ceil(restedXP / avgBase) or nil
+    return restedXP, coverage, kills
+end
+
+local function FormatQuestLine()
+    local maxXP = UnitXPMax("player") or 1
+    local noun = (readyQuests.count == 1) and "quest" or "quests"
+    if readyQuests.hasXPData then
+        return string.format("%d %s = %.0f%% of a level", readyQuests.count, noun, (readyQuests.xp / maxXP) * 100)
+    end
+    return string.format("%d %s", readyQuests.count, noun)
+end
+
+-- Builds the lines shown in both the bar's tooltip and the stats box, so the two always match.
+-- Entries: { left, right, lr, lg, lb, rr, rg, rb } for a double line, { text, r, g, b, single = true }, or { blank = true }.
+local function BuildInfoLines()
+    local lines = {}
+    local function Double(left, right, lr, lg, lb, rr, rg, rb)
+        table.insert(lines, { left, tostring(right), lr, lg, lb, rr or 1, rg or 1, rb or 1 })
+    end
+    local function Single(text, r, g, b) table.insert(lines, { text, nil, r, g, b, single = true }) end
+    local function Blank() table.insert(lines, { blank = true }) end
+
+    local current, maxXP, remaining, xpPerHour, timeToLevelStr, avgKillXP, killsToLevel, avgQuestXP, questsToLevel, timePlayed = GetXPData()
+
+    Double("Current XP:", string.format("%d / %d", current, maxXP), 1, 1, 1)
+    Double("Remaining:", remaining, 1, 1, 1)
+    local restedXP, coverage, restedKills = GetRestedPlan(remaining)
+    if restedXP then
+        Double("Rested XP:", string.format("%d (%.1f%%)", restedXP, (restedXP / maxXP) * 100), 0.2, 0.4, 1.0)
+        local plan = string.format("Covers %.0f%% of this level", coverage * 100)
+        if restedKills then plan = plan .. string.format(" (~%d kills)", restedKills) end
+        Single(plan, 0.6, 0.7, 1.0)
+    end
+    Blank()
+
+    local h = math.floor(timePlayed)
+    local m = math.floor((timePlayed - h) * 60)
+    local sec = math.floor(((timePlayed - h) * 3600) % 60)
+    Double("Session Time:", string.format("%dh %02dm %02ds", h, m, sec), 0.8, 0.8, 0.8, 0.8, 0.8, 0.8)
+    Double("Overall XP / Hour:", string.format("%.0f", xpPerHour), 0.2, 1, 0.2)
+    Double("Est. Time to Level:", timeToLevelStr, 0.2, 0.8, 1)
+    Blank()
+
+    if killCount > 0 then
+        Double(string.format("Kills (%d tracked):", killCount), string.format("~%d to level", killsToLevel), 1, 0.8, 0)
+    else
+        Double("Kills:", "Need data...", 0.5, 0.5, 0.5)
+    end
+
+    if questCount > 0 then
+        Double(string.format("Quests (%d tracked):", questCount), string.format("~%d to level", questsToLevel), 1, 0.8, 0)
+    else
+        Double("Quests:", "Need data...", 0.5, 0.5, 0.5)
+    end
+
+    -- Completed quests waiting in the log
+    if readyQuests.count > 0 then
+        Blank()
+        Double("Ready to Turn In:", FormatQuestLine(), 1, 0.82, 0)
+        if readyQuests.hasXPData and readyQuests.xp >= remaining then
+            Single("Turning these in will level you up!", 0.2, 1, 0.2)
+        end
+        if readyQuests.upgrades > 0 then
+            Single(string.format("%d of them reward%s an upgrade", readyQuests.upgrades, readyQuests.upgrades == 1 and "s" or ""), 0.2, 1, 0.2)
+        end
+    end
+
+    -- Level-locked upgrades in your bags
+    if SGJ_XP_DB.ShowUnlocks and #lockedUpgrades > 0 then
+        Blank()
+        Single("Upgrades Waiting in Your Bags", 0.2, 1, 0.2)
+        for i = 1, math.min(5, #lockedUpgrades) do
+            local item = lockedUpgrades[i]
+            local right = string.format("Lvl %d  |cff55ff55+%.1f|r", item.minLevel, item.delta)
+            if item.train then right = string.format("Train %s at %d  |cff55ff55+%.1f|r", item.train, item.minLevel, item.delta) end
+            Double(item.link, right, 1, 1, 1)
+        end
+        if #lockedUpgrades > 5 then
+            Single(string.format("...and %d more", #lockedUpgrades - 5), 0.6, 0.6, 0.6)
+        end
+    end
+
+    -- Upcoming weight profile change
+    if SGJ_XP_DB.ShowBandWarning and bandShift then
+        Blank()
+        local when = (bandShift.levelsAway == 1) and "next level" or string.format("in %d levels", bandShift.levelsAway)
+        Single(string.format("Stat Weights Change at %d (%s)", bandShift.level, when), 1, 0.5, 0)
+        Single("Likely profile: " .. bandShift.name, 0.8, 0.8, 0.8)
+        for i = 1, math.min(4, #bandShift.changes) do
+            Single("  " .. FormatWeightChange(bandShift.changes[i]), 1, 1, 1)
+        end
+        Single("Items that are close calls now may re-rank.", 0.6, 0.6, 0.6)
+    end
+
+    -- Gear score progress
+    if gearScore then
+        Blank()
+        local gain = GetGearScoreGainThisLevel()
+        local gainColor = (gain > 0) and "|cff55ff55" or "|cff999999"
+        Double("Gear Score:", string.format("%.1f  %s(%+.1f this level)|r", gearScore, gainColor, gain), 0.6, 0.8, 1)
+    end
+
+    Blank()
+    Single("Shift-click to reset the session", 0.5, 0.5, 0.5)
+    return lines
+end
+
 -- Updates the Standalone Stats Box
 local function UpdateStatsBox()
-    local level = UnitLevel("player")
-    if level >= 70 or not SGJ_XP_DB.ShowStatsBox then
+    if IsAtMaxLevel() or not SGJ_XP_DB.ShowStatsBox then
         SGJ_Stats:Hide()
         return
     else
         SGJ_Stats:Show()
     end
 
-    local current, maxXP, remaining, xpPerHour, timeToLevelStr, avgKillXP, killsToLevel, avgQuestXP, questsToLevel, timePlayed = GetXPData()
-    
     -- Title Color matches the Normal Bar setting
     local r, g, b = unpack(SGJ_XP_DB.NormalColor or {0.6, 0.2, 0.9})
     SGJ_Stats.Title:SetTextColor(r, g, b)
 
-    -- Session Time formatting
-    local h = math.floor(timePlayed)
-    local m = math.floor((timePlayed - h) * 60)
-    local s = math.floor(((timePlayed - h) * 3600) % 60)
-
-    -- Row 1: Current XP (White)
-    SGJ_Stats.Lines[1][1]:SetText("Current XP:"); SGJ_Stats.Lines[1][1]:SetTextColor(1, 1, 1)
-    SGJ_Stats.Lines[1][2]:SetText(string.format("%d / %d", current, maxXP)); SGJ_Stats.Lines[1][2]:SetTextColor(1, 1, 1)
-
-    -- Row 2: Remaining (White)
-    SGJ_Stats.Lines[2][1]:SetText("Remaining:"); SGJ_Stats.Lines[2][1]:SetTextColor(1, 1, 1)
-    SGJ_Stats.Lines[2][2]:SetText(tostring(remaining)); SGJ_Stats.Lines[2][2]:SetTextColor(1, 1, 1)
-
-    -- Row 3: Session Time (Light Grey)
-    SGJ_Stats.Lines[3][1]:SetText("Session Time:"); SGJ_Stats.Lines[3][1]:SetTextColor(0.8, 0.8, 0.8)
-    SGJ_Stats.Lines[3][2]:SetText(string.format("%dh %02dm %02ds", h, m, s)); SGJ_Stats.Lines[3][2]:SetTextColor(0.8, 0.8, 0.8)
-
-    -- Row 4: XP / Hour (Green)
-    SGJ_Stats.Lines[4][1]:SetText("Overall XP / Hour:"); SGJ_Stats.Lines[4][1]:SetTextColor(0.2, 1, 0.2)
-    SGJ_Stats.Lines[4][2]:SetText(string.format("%.0f", xpPerHour)); SGJ_Stats.Lines[4][2]:SetTextColor(1, 1, 1)
-
-    -- Row 5: Time to Level (Blue)
-    SGJ_Stats.Lines[5][1]:SetText("Est. Time to Level:"); SGJ_Stats.Lines[5][1]:SetTextColor(0.2, 0.8, 1)
-    SGJ_Stats.Lines[5][2]:SetText(timeToLevelStr); SGJ_Stats.Lines[5][2]:SetTextColor(1, 1, 1)
-
-    -- Row 6: Kills (Gold / Grey)
-    if killCount > 0 then
-        SGJ_Stats.Lines[6][1]:SetText(string.format("Kills (%d tracked):", killCount)); SGJ_Stats.Lines[6][1]:SetTextColor(1, 0.8, 0)
-        SGJ_Stats.Lines[6][2]:SetText(string.format("~%d to level", killsToLevel)); SGJ_Stats.Lines[6][2]:SetTextColor(1, 1, 1)
-    else
-        SGJ_Stats.Lines[6][1]:SetText("Kills:"); SGJ_Stats.Lines[6][1]:SetTextColor(0.5, 0.5, 0.5)
-        SGJ_Stats.Lines[6][2]:SetText("Need data..."); SGJ_Stats.Lines[6][2]:SetTextColor(1, 1, 1)
+    local lines = BuildInfoLines()
+    local inner = STATS_BOX_WIDTH - 20
+    local y = -30
+    for i, entry in ipairs(lines) do
+        local left, right = GetStatsRow(i)
+        left:ClearAllPoints(); right:ClearAllPoints()
+        left:SetText(""); right:SetText("")
+        if entry.blank then
+            y = y - 8
+        else
+            left:SetPoint("TOPLEFT", 10, y)
+            right:SetPoint("TOPRIGHT", -10, y)
+            left:SetTextColor(entry[3], entry[4], entry[5])
+            if entry.single then
+                left:SetWidth(inner)
+                left:SetText(entry[1])
+            else
+                -- Right side sizes to its text (capped); the left side gets the rest and truncates
+                right:SetWidth(0)
+                right:SetText(entry[2])
+                right:SetTextColor(entry[6], entry[7], entry[8])
+                local rightWidth = math.min(right:GetStringWidth(), inner * 0.65)
+                right:SetWidth(rightWidth)
+                left:SetWidth(math.max(40, inner - rightWidth - 8))
+                left:SetText(entry[1])
+            end
+            y = y - 15
+        end
     end
 
-    -- Row 7: Quests (Gold / Grey)
-    if questCount > 0 then
-        SGJ_Stats.Lines[7][1]:SetText(string.format("Quests (%d tracked):", questCount)); SGJ_Stats.Lines[7][1]:SetTextColor(1, 0.8, 0)
-        SGJ_Stats.Lines[7][2]:SetText(string.format("~%d to level", questsToLevel)); SGJ_Stats.Lines[7][2]:SetTextColor(1, 1, 1)
-    else
-        SGJ_Stats.Lines[7][1]:SetText("Quests:"); SGJ_Stats.Lines[7][1]:SetTextColor(0.5, 0.5, 0.5)
-        SGJ_Stats.Lines[7][2]:SetText("Need data..."); SGJ_Stats.Lines[7][2]:SetTextColor(1, 1, 1)
+    -- Clear rows left over from a longer update
+    for i = #lines + 1, #SGJ_Stats.Lines do
+        SGJ_Stats.Lines[i][1]:SetText("")
+        SGJ_Stats.Lines[i][2]:SetText("")
     end
+    SGJ_Stats:SetHeight(-y + 10)
 end
 
 -- Makes the timers tick in real-time (Throttled to 1 update per second)
 local timerUpdateDelay = 0
 SGJ_Stats:SetScript("OnUpdate", function(self, elapsed)
     if not self:IsShown() then return end
-    
+
     timerUpdateDelay = timerUpdateDelay + elapsed
     if timerUpdateDelay >= 1.0 then
         UpdateStatsBox()
@@ -368,13 +782,24 @@ SGJ_Stats:SetScript("OnUpdate", function(self, elapsed)
     end
 end)
 
+local function UpdateUnlockMarker()
+    local nextLevel = UnitLevel("player") + 1
+    local item = lockedUpgrades[1]
+    if SGJ_XP_DB.ShowUnlocks and SGJ_XP:IsShown() and item and item.minLevel == nextLevel then
+        SGJ_XP.Unlock.Icon:SetTexture(item.icon)
+        SGJ_XP.Unlock:Show()
+    else
+        SGJ_XP.Unlock:Hide()
+    end
+end
+
 -- Updates the Visual Bar
 local function UpdateBar()
     UpdateStatsBox() -- Ensure the box always updates alongside the bar
-    
-    local level = UnitLevel("player")
-    if level >= 70 or not SGJ_XP_DB.ShowXPBar then
+
+    if IsAtMaxLevel() or not SGJ_XP_DB.ShowXPBar then
         SGJ_XP:Hide()
+        SGJ_XP.Unlock:Hide()
         return
     else
         SGJ_XP:Show()
@@ -383,7 +808,7 @@ local function UpdateBar()
     local currXP = UnitXP("player") or 0
     local maxXP = UnitXPMax("player") or 1
     local restedXP = GetXPExhaustion() or 0
-    
+
     SGJ_XP.Bar:SetMinMaxValues(0, maxXP)
     SGJ_XP.Bar:SetValue(currXP)
     SGJ_XP.RestedBar:SetMinMaxValues(0, maxXP)
@@ -396,6 +821,15 @@ local function UpdateBar()
     else
         SGJ_XP.Bar:SetStatusBarColor(unpack(SGJ_XP_DB.NormalColor))
         SGJ_XP.RestedBar:Hide()
+    end
+
+    if SGJ_XP_DB.ShowQuestProjection and readyQuests.xp > 0 then
+        SGJ_XP.QuestBar:SetMinMaxValues(0, maxXP)
+        SGJ_XP.QuestBar:SetValue(math.min(maxXP, currXP + readyQuests.xp))
+        SGJ_XP.QuestBar:SetStatusBarColor(unpack(SGJ_XP_DB.QuestColor))
+        SGJ_XP.QuestBar:Show()
+    else
+        SGJ_XP.QuestBar:Hide()
     end
 
     local pct = (maxXP > 0) and ((currXP / maxXP) * 100) or 0
@@ -411,13 +845,86 @@ local function UpdateBar()
         SGJ_XP.Text:SetText("")
     end
     SGJ_XP.Text:SetTextColor(unpack(SGJ_XP_DB.TextColor))
+
+    UpdateUnlockMarker()
 end
 
--- Global function to reset the tracker
-function SGJ_ResetXPSession()
-    sessionStartTime = GetTime()
-    totalXPGainedSession = 0
-    print("|cffa335ee[SGJ XP]|r Session Tracker Reset.")
+-- Rescans everything that depends on the main addon's scoring
+local function RefreshGearData()
+    if InCombatLockdown() then return end
+    lockedUpgrades = ScanBagUpgrades(UnitLevel("player"))
+    bandShift = GetUpcomingBandShift()
+    RefreshGearScore()
+    UpdateBar()
+end
+
+local function RefreshQuestData()
+    if InCombatLockdown() then return end
+    readyQuests = ScanReadyQuests()
+    UpdateBar()
+end
+
+-- Level-up gear check: runs once the main addon has re-detected the new level's profile
+local function RunDingCheck(oldLevel, newLevel)
+    local MSC = _G.MSC
+    if MSC and MSC.BumpScoringRevision then MSC:BumpScoringRevision() end
+    local locked, ready = ScanBagUpgrades(oldLevel)
+    lockedUpgrades = locked
+    bandShift = GetUpcomingBandShift()
+    RefreshGearScore()
+    UpdateBar()
+
+    if not SGJ_XP_DB.DingAlert then return end
+
+    local unspent = UnitCharacterPoints and UnitCharacterPoints("player") or 0
+    local lines = {}
+    if #ready > 0 then
+        table.insert(lines, string.format("|cff55ff55%d upgrade%s now equippable|r", #ready, #ready > 1 and "s" or ""))
+        print(string.format("|cffa335ee[SGJ XP]|r Ding! Level %d unlocked these upgrades in your bags:", newLevel))
+        local trainNeeded
+        for _, item in ipairs(ready) do
+            local note = item.train and string.format("  |cffffd100(train %s first)|r", item.train) or ""
+            print(string.format("   %s  |cff55ff55(+%.1f)|r%s", item.link, item.delta, note))
+            trainNeeded = trainNeeded or item.train
+        end
+        if trainNeeded then
+            table.insert(lines, string.format("|cffffd100Visit your trainer to learn %s|r", trainNeeded))
+        end
+    end
+    if unspent and unspent > 0 then
+        table.insert(lines, string.format("|cffffd100%d unspent talent point%s|r (talents change your weights)", unspent, unspent > 1 and "s" or ""))
+    end
+    if #lines == 0 then return end
+
+    SGJ_Ding.Title:SetText(string.format("Ding! Level %d", newLevel))
+    SGJ_Ding.Body:SetText(table.concat(lines, "\n"))
+    SGJ_Ding:SetHeight(50 + SGJ_Ding.Body:GetStringHeight() + 14)
+    SGJ_Ding:ClearAllPoints()
+    if SGJ_XP:IsShown() then
+        SGJ_Ding:SetPoint("BOTTOM", SGJ_XP, "TOP", 0, 12)
+    elseif SGJ_Stats:IsShown() then
+        SGJ_Ding:SetPoint("BOTTOM", SGJ_Stats, "TOP", 0, 8)
+    else
+        SGJ_Ding:SetPoint("TOP", UIParent, "TOP", 0, -150)
+    end
+    SGJ_Ding:Show()
+    C_Timer.After(15, function() SGJ_Ding:Hide() end)
+end
+
+-- Bar tooltip (same lines as the stats box)
+local function ShowXPTooltip(owner)
+    GameTooltip:SetOwner(owner, "ANCHOR_TOP")
+    GameTooltip:AddLine("SGJ Experience", unpack(SGJ_XP_DB.NormalColor))
+    for _, entry in ipairs(BuildInfoLines()) do
+        if entry.blank then
+            GameTooltip:AddLine(" ")
+        elseif entry.single then
+            GameTooltip:AddLine(entry[1], entry[3], entry[4], entry[5])
+        else
+            GameTooltip:AddDoubleLine(entry[1], entry[2], entry[3], entry[4], entry[5], entry[6], entry[7], entry[8])
+        end
+    end
+    GameTooltip:Show()
 end
 
 -- ============================================================================
@@ -438,41 +945,20 @@ SGJ_XP:SetScript("OnDragStop", function(self)
 end)
 
 -- Tooltip Display
-SGJ_XP:SetScript("OnEnter", function(self)
+SGJ_XP:SetScript("OnEnter", ShowXPTooltip)
+SGJ_XP:SetScript("OnLeave", function(self) GameTooltip:Hide() end)
+
+SGJ_XP.Unlock:SetScript("OnEnter", function(self)
+    local item = lockedUpgrades[1]
+    if not item then return end
     GameTooltip:SetOwner(self, "ANCHOR_TOP")
-    GameTooltip:AddLine("SGJ Experience", unpack(SGJ_XP_DB.NormalColor))
-
-    local current, maxXP, remaining, xpPerHour, timeToLevelStr, avgKillXP, killsToLevel, avgQuestXP, questsToLevel, timePlayed = GetXPData()
-
-    GameTooltip:AddDoubleLine("Current XP:", string.format("%d / %d", current, maxXP), 1, 1, 1, 1, 1, 1)
-    GameTooltip:AddDoubleLine("Remaining:", remaining, 1, 1, 1, 1, 1, 1)
-    local restedXP = GetXPExhaustion() or 0
-    if restedXP > 0 then
-        GameTooltip:AddDoubleLine("Rested XP:", string.format("%d (%.1f%%)", restedXP, (restedXP / maxXP) * 100), 0.2, 0.4, 1.0, 1, 1, 1)
-    end
+    GameTooltip:SetHyperlink(item.link)
     GameTooltip:AddLine(" ")
-    GameTooltip:AddDoubleLine("Overall XP / Hour:", string.format("%.0f", xpPerHour), 0.2, 1, 0.2, 1, 1, 1)
-    GameTooltip:AddDoubleLine("Est. Time to Level:", timeToLevelStr, 0.2, 0.8, 1, 1, 1, 1)
-    GameTooltip:AddLine(" ")
-    
-    if killCount > 0 then
-        GameTooltip:AddDoubleLine(string.format("Kills (%d tracked):", killCount), string.format("~%d to level", killsToLevel), 1, 0.8, 0, 1, 1, 1)
-    else
-        GameTooltip:AddDoubleLine("Kills:", "Need data...", 0.5, 0.5, 0.5, 1, 1, 1)
-    end
-    
-    if questCount > 0 then
-        GameTooltip:AddDoubleLine(string.format("Quests (%d tracked):", questCount), string.format("~%d to level", questsToLevel), 1, 0.8, 0, 1, 1, 1)
-    else
-        GameTooltip:AddDoubleLine("Quests:", "Need data...", 0.5, 0.5, 0.5, 1, 1, 1)
-    end
-
+    GameTooltip:AddLine(string.format("Unlocks at level %d: |cff55ff55+%.1f|r score", item.minLevel, item.delta), 0.2, 1, 0.2)
+    if item.train then GameTooltip:AddLine(string.format("Train %s at your class trainer first", item.train), 1, 0.82, 0) end
     GameTooltip:Show()
 end)
-
-SGJ_XP:SetScript("OnLeave", function(self)
-    GameTooltip:Hide()
-end)
+SGJ_XP.Unlock:SetScript("OnLeave", function(self) GameTooltip:Hide() end)
 
 -- Click Actions (Shift-Click to Reset)
 SGJ_XP:SetScript("OnMouseUp", function(self, button)
@@ -488,8 +974,15 @@ SGJ_XP:RegisterEvent("PLAYER_XP_UPDATE")
 SGJ_XP:RegisterEvent("PLAYER_LEVEL_UP")
 SGJ_XP:RegisterEvent("UPDATE_EXHAUSTION")
 SGJ_XP:RegisterEvent("CHAT_MSG_COMBAT_XP_GAIN")
+SGJ_XP:RegisterEvent("CHAT_MSG_SYSTEM")
 SGJ_XP:RegisterEvent("PLAYER_REGEN_DISABLED")
 SGJ_XP:RegisterEvent("PLAYER_REGEN_ENABLED")
+SGJ_XP:RegisterEvent("BAG_UPDATE_DELAYED")
+SGJ_XP:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
+SGJ_XP:RegisterEvent("QUEST_LOG_UPDATE")
+SGJ_XP:RegisterEvent("CHARACTER_POINTS_CHANGED")
+-- QUEST_TURNED_IN carries the exact XP; older clients fall back to parsing chat
+useTurnedInEvent = pcall(SGJ_XP.RegisterEvent, SGJ_XP, "QUEST_TURNED_IN")
 
 SGJ_XP:SetScript("OnEvent", function(self, event, ...)
     if event == "ADDON_LOADED" then
@@ -509,22 +1002,27 @@ SGJ_XP:SetScript("OnEvent", function(self, event, ...)
             if SGJ_XP_DB.RestedColor == nil then SGJ_XP_DB.RestedColor = {0.2, 0.4, 1.0, 1.0} end -- Blue
             if SGJ_XP_DB.TickColor == nil then SGJ_XP_DB.TickColor = {0.0, 0.0, 0.0, 0.8} end     -- Black
             if SGJ_XP_DB.TextColor == nil then SGJ_XP_DB.TextColor = {1.0, 1.0, 1.0, 1.0} end     -- White
+            if SGJ_XP_DB.QuestColor == nil then SGJ_XP_DB.QuestColor = {1.0, 0.82, 0.0, 0.45} end -- Translucent Gold
             if SGJ_XP_DB.ShowXPBar == nil then SGJ_XP_DB.ShowXPBar = true end
             if SGJ_XP_DB.ShowStatsBox == nil then SGJ_XP_DB.ShowStatsBox = false end
-            
+            if SGJ_XP_DB.ShowUnlocks == nil then SGJ_XP_DB.ShowUnlocks = true end
+            if SGJ_XP_DB.DingAlert == nil then SGJ_XP_DB.DingAlert = true end
+            if SGJ_XP_DB.ShowBandWarning == nil then SGJ_XP_DB.ShowBandWarning = true end
+            if SGJ_XP_DB.ShowQuestProjection == nil then SGJ_XP_DB.ShowQuestProjection = true end
+
             -- Apply Saved Data
             SGJ_XP:SetSize(SGJ_XP_DB.XPBarWidth, SGJ_XP_DB.XPBarHeight)
             SGJ_XP:SetBackdropColor(0, 0, 0, SGJ_XP_DB.BgOpacity)
             SGJ_Stats:SetBackdropColor(0, 0, 0, SGJ_XP_DB.BgOpacity) -- Apply opacity to the new box
             UpdateTicks()
-            
+
             -- Load XP Bar Position
             if SGJ_XP_DB.Position then
                 SGJ_XP:ClearAllPoints()
                 local p = SGJ_XP_DB.Position
                 SGJ_XP:SetPoint(p[1], UIParent, p[2], p[3], p[4])
             end
-            
+
             -- Load Stats Box Position
             if SGJ_XP_DB.StatsBoxPosition then
                 SGJ_Stats:ClearAllPoints()
@@ -532,50 +1030,95 @@ SGJ_XP:SetScript("OnEvent", function(self, event, ...)
                 SGJ_Stats:SetPoint(p[1], UIParent, p[2], p[3], p[4])
             end
         end
-        
+
     elseif event == "PLAYER_ENTERING_WORLD" then
-        sessionStartTime = GetTime()
+        -- Fires on every loading screen; only the first one starts the session
+        if not sessionStarted then
+            sessionStarted = true
+            sessionStartTime = GetTime()
+        end
         lastXP = UnitXP("player") or 0
+        lastMaxXP = UnitXPMax("player") or 1
+        lastRested = GetXPExhaustion() or 0
         UpdateBlizzardBarVisibility()
         UpdateBar()
-        
+        -- Give the main addon time to detect the spec before scoring
+        Debounce("gear", 3, RefreshGearData)
+        Debounce("quests", 3, RefreshQuestData)
+
     elseif event == "PLAYER_XP_UPDATE" then
         TrackXPGains()
         UpdateBar()
-        
-    elseif event == "PLAYER_LEVEL_UP" or event == "UPDATE_EXHAUSTION" then
+
+    elseif event == "PLAYER_LEVEL_UP" then
+        local newLevel = ...
+        local oldLevel = UnitLevel("player")
+        newLevel = tonumber(newLevel) or (oldLevel + 1)
+        if oldLevel >= newLevel then oldLevel = newLevel - 1 end
         UpdateBar()
-        
+        -- UnitLevel still reports the old level during this event
+        C_Timer.After(1.5, function() RunDingCheck(oldLevel, newLevel) end)
+
+    elseif event == "UPDATE_EXHAUSTION" then
+        lastRested = GetXPExhaustion() or 0
+        UpdateBar()
+
     elseif event == "CHAT_MSG_COMBAT_XP_GAIN" then
-        local text = ... 
-        local gainedXP = string.match(text, "(%d+) experience")
-        if gainedXP then
-            local amount = tonumber(gainedXP)
+        local text = ...
+        local _, gainedXP = string.match(text, KILL_PATTERN)
+        local amount = tonumber(gainedXP)
+        if amount then
+            -- Rested kills print "(+N exp Rested bonus)"; strip it so rested math uses base XP
+            local base = amount
+            local bonus = tonumber((text:match("%((.-)%)") or ""):match("(%d+)") or "")
+            if bonus and lastRested > 0 and bonus < amount then base = amount - bonus end
             killXPTotal = killXPTotal + amount
+            killBaseXPTotal = killBaseXPTotal + base
             killCount = killCount + 1
         end
-        
-    elseif event == "CHAT_MSG_SYSTEM" then
-        local text = ...
-        -- Quest XP usually comes through system messages. We check both common string patterns.
-        local gainedXP = string.match(text, "Experience gained: (%d+)")
-        if not gainedXP then 
-            gainedXP = string.match(text, "gain (%d+) experience") 
+        lastRested = GetXPExhaustion() or 0
+
+    elseif event == "QUEST_TURNED_IN" then
+        local _, xpReward = ...
+        xpReward = tonumber(xpReward)
+        if xpReward and xpReward > 0 then
+            questXPTotal = questXPTotal + xpReward
+            questCount = questCount + 1
         end
-        
+        Debounce("gear", 1, RefreshGearData) -- Rewards land in your bags
+
+    elseif event == "CHAT_MSG_SYSTEM" then
+        if useTurnedInEvent then return end
+        local text = ...
+        local gainedXP = string.match(text, QUEST_PATTERN)
         if gainedXP then
             local amount = tonumber(gainedXP)
             questXPTotal = questXPTotal + amount
             questCount = questCount + 1
         end
-		
+
+    elseif event == "BAG_UPDATE_DELAYED" then
+        Debounce("gear", 1, RefreshGearData)
+
+    elseif event == "PLAYER_EQUIPMENT_CHANGED" or event == "CHARACTER_POINTS_CHANGED" then
+        Debounce("gear", 1, RefreshGearData)
+
+    elseif event == "QUEST_LOG_UPDATE" then
+        -- Our own scan selects quest log entries; ignore the echo so we don't loop
+        if GetTime() - lastQuestScanEnd < 0.5 then return end
+        Debounce("quests", 1, RefreshQuestData)
+
     elseif event == "PLAYER_REGEN_DISABLED" then
         if SGJ_XP_DB.HideInCombat then
             SGJ_XP:Hide()
+            SGJ_XP.Unlock:Hide()
             SGJ_Stats:Hide()
         end
     elseif event == "PLAYER_REGEN_ENABLED" then
         UpdateBar() -- Handles showing both safely
+        -- Catch up on anything skipped while in combat
+        Debounce("gear", 1, RefreshGearData)
+        Debounce("quests", 1, RefreshQuestData)
     end
 end)
 
@@ -606,7 +1149,7 @@ local function BuildXPOptionsTab(parent)
     HideBlizzBox.Text:SetText("Hide Blizzard XP Bar"); HideBlizzBox.Text:SetTextColor(0.9, 0.9, 0.9)
     HideBlizzBox:SetChecked(SGJ_XP_DB.HideBlizzardXP)
     HideBlizzBox:SetScript("OnClick", function(self) SGJ_XP_DB.HideBlizzardXP = self:GetChecked(); UpdateBlizzardBarVisibility() end)
-	
+
 	-- Show XP Bar Toggle
     local ShowBarBox = CreateFrame("CheckButton", nil, f, "ChatConfigCheckButtonTemplate")
     ShowBarBox:SetPoint("TOPLEFT", HideBlizzBox, "BOTTOMLEFT", 0, -10) -- Fixed Spacing
@@ -633,10 +1176,33 @@ local function BuildXPOptionsTab(parent)
     TicksBox:SetPoint("TOPLEFT", CombatBox, "BOTTOMLEFT", 0, -10)
     TicksBox.Text:SetText("Show 20-Segment Brackets (Classic Style)"); TicksBox.Text:SetTextColor(0.9, 0.9, 0.9)
     TicksBox:SetChecked(SGJ_XP_DB.ShowTicks)
-    TicksBox:SetScript("OnClick", function(self) 
+    TicksBox:SetScript("OnClick", function(self)
         SGJ_XP_DB.ShowTicks = self:GetChecked()
         UpdateTicks() -- Redraws immediately
     end)
+
+    -- Gear Judge Integration (right column)
+    local gearTitle = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    gearTitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 300, -6)
+    gearTitle:SetText("Gear Judge Integration")
+    gearTitle:SetTextColor(1, 0.82, 0)
+
+    local function CreateGearToggle(label, dbKey, anchor, onChange)
+        local box = CreateFrame("CheckButton", nil, f, "ChatConfigCheckButtonTemplate")
+        box:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -10)
+        box.Text:SetText(label); box.Text:SetTextColor(0.9, 0.9, 0.9)
+        box:SetChecked(SGJ_XP_DB[dbKey])
+        box:SetScript("OnClick", function(self)
+            SGJ_XP_DB[dbKey] = self:GetChecked()
+            if onChange then onChange() end
+        end)
+        return box
+    end
+
+    local UnlocksBox = CreateGearToggle("Show Level-Locked Upgrades", "ShowUnlocks", gearTitle, UpdateBar)
+    local DingBox = CreateGearToggle("Level-Up Gear Alert", "DingAlert", UnlocksBox)
+    local BandBox = CreateGearToggle("Warn Before Weights Change", "ShowBandWarning", DingBox)
+    CreateGearToggle("Show Quest Turn-In Projection", "ShowQuestProjection", BandBox, UpdateBar)
 
     -- 5. Cycle Text Format Button
     local FormatBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
@@ -665,8 +1231,8 @@ local function BuildXPOptionsTab(parent)
 
     WidthSlider:SetScript("OnValueChanged", function(self, value)
         _G[self:GetName() .. 'Text']:SetText('Bar Width: ' .. value .. 'px')
-        if SGJ_ExperienceBar then 
-            SGJ_ExperienceBar:SetWidth(value) 
+        if SGJ_ExperienceBar then
+            SGJ_ExperienceBar:SetWidth(value)
             UpdateTicks() -- Redraw the brackets so they space out evenly!
         end
         SGJ_XP_DB.XPBarWidth = value
@@ -682,7 +1248,7 @@ local function BuildXPOptionsTab(parent)
 
     HeightSlider:SetScript("OnValueChanged", function(self, value)
         _G[self:GetName() .. 'Text']:SetText('Bar Height: ' .. value .. 'px')
-        if SGJ_ExperienceBar then 
+        if SGJ_ExperienceBar then
             SGJ_ExperienceBar:SetHeight(value)
             UpdateTicks() -- Make the bracket lines stretch to fit the new height
         end
@@ -702,28 +1268,28 @@ local function BuildXPOptionsTab(parent)
         if SGJ_ExperienceBar then SGJ_ExperienceBar:SetBackdropColor(0, 0, 0, value) end
         SGJ_XP_DB.BgOpacity = value
     end)
-	
+
 	-- Helper function to create uniform color buttons
     local function CreateColorSwatch(name, dbKey, anchorFrame, xOff, yOff, updateAction)
         local btn = CreateFrame("Button", nil, f)
         btn:SetSize(20, 20)
         btn:SetPoint("TOPLEFT", anchorFrame, "BOTTOMLEFT", xOff, yOff)
-        
+
         -- The solid color square
         btn.ColorTex = btn:CreateTexture(nil, "BACKGROUND")
         btn.ColorTex:SetAllPoints()
         btn.ColorTex:SetColorTexture(unpack(SGJ_XP_DB[dbKey]))
-        
+
         -- The Blizzard border for swatches
         btn.Border = btn:CreateTexture(nil, "OVERLAY")
         btn.Border:SetTexture("Interface\\ChatFrame\\ChatFrameColorSwatch")
         btn.Border:SetPoint("CENTER")
         btn.Border:SetSize(24, 24)
-        
+
         btn.Text = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         btn.Text:SetPoint("LEFT", btn, "RIGHT", 5, 0)
         btn.Text:SetText(name)
-        
+
         btn:SetScript("OnClick", function()
             local r, g, b, a = unpack(SGJ_XP_DB[dbKey])
             OpenColorPicker(r, g, b, a, function(newR, newG, newB, newA)
@@ -738,11 +1304,12 @@ local function BuildXPOptionsTab(parent)
         return btn
     end
 
-    -- Create the 2x2 Color Grid
+    -- Create the Color Grid
     -- Left Column
     local cNormal = CreateColorSwatch("Normal Bar Color", "NormalColor", OpacitySlider, 0, -25, UpdateBar)
     local cTicks = CreateColorSwatch("Milestone Ticks", "TickColor", cNormal, 0, -15, UpdateTicks)
-    
+    CreateColorSwatch("Quest Turn-In Color", "QuestColor", cTicks, 0, -15, UpdateBar)
+
     -- Right Column
     local cRested = CreateColorSwatch("Rested Bar Color", "RestedColor", OpacitySlider, 150, -25, UpdateBar)
     local cText = CreateColorSwatch("Text Color", "TextColor", cRested, 0, -15, UpdateBar)
@@ -764,6 +1331,3 @@ TabInjector:SetScript("OnEvent", function()
         )
     end
 end)
-
-
-

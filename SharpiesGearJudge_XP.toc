@@ -2,7 +2,7 @@
 ## Title: Sharpie's Gear Judge - XP Bar
 ## Notes: A dynamic, tracking experience bar plugin for SGJ.
 ## Author: Supersharpie
-## Version: 1.0
+## Version: 1.1
 ## Dependencies: SharpiesGearJudge
 ## SavedVariables: SGJ_XP_DB
 
