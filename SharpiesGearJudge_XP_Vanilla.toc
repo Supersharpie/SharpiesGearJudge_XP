@@ -1,0 +1,9 @@
+## Interface: 11508
+## Title: Sharpie's Gear Judge - XP Bar (Era Edition)
+## Notes: A dynamic, tracking experience bar plugin for SGJ.
+## Author: Supersharpie
+## Version: 1.1-Vanilla
+## Dependencies: SharpiesGearJudge
+## SavedVariables: SGJ_XP_DB
+
+XPBar.lua
