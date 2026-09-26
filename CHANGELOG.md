@@ -1,6 +1,6 @@
 # Sharpie's Gear Judge - XP Bar (Changelog)
 ---
-## 🚀 v1.1
+## 🚀 v1.0.1
 ### ⚔️ Gear Judge Integration
 - **Upgrades Waiting in Your Bags**: Scans your bags for items SGJ rates as upgrades but that you're too low level to equip. The tooltip lists them by unlock level, and when one unlocks at the next level its icon sits at the end of the bar.
 - **Level-Up Gear Alert**: On level-up, a "Ding!" alert lists the bag upgrades you can now equip (also printed to chat as clickable links) and any unspent talent points. Left-click opens your bags; right-click dismisses it.
@@ -22,7 +22,7 @@
 - **Forever / Era TOCs**: Added `SharpiesGearJudge_XP_Forever.toc` and `SharpiesGearJudge_XP_Vanilla.toc` so the plugin isn't flagged out of date on those clients.
 - **Cleanup**: Removed the unused `L1`-`L7` stats-box font strings and the duplicate drag handlers.
 
-## 🚀 v1.0
+## 🚀 v1.0.0
 ### ✨ Features & Updates
 - **Rested XP UI Updates**: Upgraded the visual tracking of the experience bar. The bar now draws a classic, translucent blue "tail" extending outward to show exactly where your rested XP ends.
 - **Rested Tooltips**: Added exact Rested XP mathematical data directly into the tooltip when hovering over the experience bar.

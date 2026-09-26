@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Package Addon (Zip)
         run: |
@@ -37,22 +37,20 @@ jobs:
 
       - name: Upload to CurseForge
         env:
-          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_API_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
           PROJECT_ID: "1703196"
           RELEASE_TYPE: ${{ github.event.inputs.release_type || 'release' }}
         run: |
           echo "Preparing upload for project $PROJECT_ID..."
           
-          # --- Auto-detect Game Versions from .toc file ---
+          # --- Auto-detect Game Versions from ALL .toc files ---
           GAME_VERSIONS_JSON="[]"
-          # Find the first .toc file in the repository root
-          TOC_FILE=$(ls *.toc 2>/dev/null | head -n 1)
           
-          if [ -n "$TOC_FILE" ]; then
-            echo "Found TOC file: $TOC_FILE"
-            # Extract all numbers from the '## Interface:' line
-            # E.g. '## Interface: 110005' -> '110005'
-            INTERFACE_VALS=$(grep -i "^## Interface:" "$TOC_FILE" | grep -o -E "[0-9]+")
+          # Check if there are any .toc files
+          if ls *.toc 1> /dev/null 2>&1; then
+            echo "Found TOC files, scanning for game versions..."
+            # Extract all numbers from all '## Interface:' lines across all .toc files
+            INTERFACE_VALS=$(cat *.toc | grep -i "^## Interface:" | grep -o -E "[0-9]+")
             
             VERSIONS_ARRAY=()
             for VAL in $INTERFACE_VALS; do
@@ -60,11 +58,14 @@ jobs:
               MAJOR=$((VAL / 10000))
               MINOR=$(((VAL % 10000) / 100))
               PATCH=$((VAL % 100))
-              VERSIONS_ARRAY+=("\"$MAJOR.$MINOR.$PATCH\"")
+              VERSIONS_ARRAY+=("$MAJOR.$MINOR.$PATCH")
             done
             
+            # Remove duplicates by sorting and getting unique values
             if [ ${#VERSIONS_ARRAY[@]} -gt 0 ]; then
-              GAME_VERSIONS_JSON=$(IFS=,; echo "[${VERSIONS_ARRAY[*]}]")
+              UNIQUE_VERSIONS=$(printf "%s\n" "${VERSIONS_ARRAY[@]}" | sort -u)
+              # jq splits the lines into an array and removes the trailing empty string
+              GAME_VERSIONS_JSON=$(echo "$UNIQUE_VERSIONS" | jq -R -s -c 'split("\n") | map(select(length > 0))')
               echo "Detected game versions: $GAME_VERSIONS_JSON"
             fi
           fi
