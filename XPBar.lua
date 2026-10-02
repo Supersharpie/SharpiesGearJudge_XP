@@ -380,6 +380,9 @@ end
 -- level 40 as "trained", so looking ahead from below 40 needs its own check.
 local ARMOR_TRAINED_AT_40 = { WARRIOR = 4, PALADIN = 4, SHAMAN = 3, HUNTER = 3 }
 
+-- Locked upgrades further than this many levels out aren't worth listing yet.
+local UNLOCK_LOOKAHEAD_LEVELS = 5
+
 -- Returns the score gain if SGJ judges `link` an upgrade, else nil.
 -- `assumeUsable` skips the usable check for armor you'll train later.
 local function GetUpgradeDelta(link, weights, specKey, assumeUsable)
@@ -405,6 +408,8 @@ local function ScanBagUpgrades(fromLevel)
     local level = UnitLevel("player")
     local _, playerClass = UnitClass("player")
     local trainedArmor = ARMOR_TRAINED_AT_40[playerClass]
+    -- Skip anything you can't reach soon, or at all under this realm's level cap
+    local horizon = math.min(level + UNLOCK_LOOKAHEAD_LEVELS, GetMaxLevel())
 
     for bag = 0, (NUM_BAG_SLOTS or 4) do
         for slot = 1, (GetContainerNumSlots(bag) or 0) do
@@ -414,7 +419,7 @@ local function ScanBagUpgrades(fromLevel)
                 -- Mail/Plate you can't wear until you train it at 40 unlocks at 40, whatever its own requirement
                 local needsTraining = trainedArmor and fromLevel < 40 and classID == 4 and subClassID == trainedArmor
                 local unlockLevel = minLevel and (needsTraining and math.max(minLevel, 40) or minLevel)
-                if unlockLevel and unlockLevel > fromLevel then
+                if unlockLevel and unlockLevel > fromLevel and unlockLevel <= horizon then
                     local ok, delta = pcall(GetUpgradeDelta, link, weights, specKey, needsTraining and level < 40)
                     if ok and delta then
                         local entry = { link = link, icon = icon, minLevel = unlockLevel, delta = delta }

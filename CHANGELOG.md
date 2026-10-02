@@ -1,11 +1,16 @@
 # Sharpie's Gear Judge - XP Bar (Changelog)
 ---
+## 🚀 v1.1.1
+### 🐛 Bug Fixes
+- **Loads on WoW Forever**: The Forever client reads the plain `.toc` file, which only listed the TBC client, so the XP Bar showed as Incompatible. It now lists both.
+
 ## 🚀 v1.0.1
 ### ⚔️ Gear Judge Integration
 - **Upgrades Waiting in Your Bags**: Scans your bags for items SGJ rates as upgrades but that you're too low level to equip. The tooltip lists them by unlock level, and when one unlocks at the next level its icon sits at the end of the bar.
 - **Level-Up Gear Alert**: On level-up, a "Ding!" alert lists the bag upgrades you can now equip (also printed to chat as clickable links) and any unspent talent points. Left-click opens your bags; right-click dismisses it.
 - **Stat Weight Change Warning**: Within 2 levels of a leveling weight band change (e.g. 20 -> 21), the tooltip shows the likely new profile and the biggest weight changes, so you know which items may re-rank. When a profile changes name between bands (Paladin DPS: `Leveling_41_51` -> `Leveling_Ret_52_59`), the warning uses the next band's profile that doesn't continue from an earlier band.
 - **Mail/Plate Training Look-Ahead**: Warriors and Paladins (Plate) and Hunters and Shamans (Mail) now see those items under "Upgrades Waiting" before 40, marked "Train Mail at 40". At 40, the level-up alert reminds you to visit your trainer.
+- **Upgrades Waiting Only Looks 5 Levels Ahead**: Items that unlock more than 5 levels away, or above the realm's level cap, are no longer listed. At level 20, Mail you can't train until 40 no longer shows up.
 - **Stats Box Matches the Tooltip**: The standalone box and the bar's tooltip are built from the same list of lines, so the box now shows everything the tooltip does (rested plan, full upgrade list, weight warning, quest details). It resizes to fit, supports Shift-click to reset, and the level-up alert anchors to the box when the bar is hidden.
 - **Quest Turn-In Projection**: Adds up completed quests in your log. A translucent gold section on the bar shows where you'll land after turning them in, and the tooltip says how many of them reward an upgrade and whether turning them in will level you. Quests under collapsed quest log headers aren't counted.
 - **Gear Score Tracking**: Shows your SGJ character score and how much it grew this level. It's logged per level for each character.
