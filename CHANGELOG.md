@@ -1,5 +1,13 @@
 # Sharpie's Gear Judge - XP Bar (Changelog)
 ---
+## 🚀 v1.1.2
+### 🖼️ Options Redesigned for the Bigger Window
+- Gear Judge 3.2.0 makes the main window wider, and the XP Tracker options now sit in three columns: what the bar shows and when (left), size, opacity and colours (middle), and Gear Judge Integration (right).
+- The width, height and opacity sliders are wider, so they are easier to set precisely.
+- The five colour swatches are one list under the sliders. Before, the last one (Quest Turn-In Color) hung off the bottom of the page.
+- The text-format button has a tooltip explaining the cycle (both, raw XP, percent, none).
+- **Fixed: Quest Turn-In Projection Never Showed on Forever**: Forever uses the modern quest log functions and has none of the classic ones (`GetQuestLogTitle`, `SelectQuestLogEntry`), so the scan for ready quests stopped before it started: no projection on the bar, no quest-colour section, and no upgrade count for quest rewards. The scan now uses the modern quest log when the game has it, and the classic one otherwise.
+- **Fixed: Colour Swatches Showed White**: The swatch frame was drawn on top of the colour, so each swatch looked white with a thin coloured rim. The colour now fills the box.
 ## 🚀 v1.1.1
 ### 🐛 Bug Fixes
 - **Loads on WoW Forever**: The Forever client reads the plain `.toc` file, which only listed the TBC client, so the XP Bar showed as Incompatible. It now lists both.

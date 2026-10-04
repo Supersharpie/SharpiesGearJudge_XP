@@ -509,46 +509,73 @@ end
 
 -- Sums completed quests in the log: XP (when the client exposes it) and rewards SGJ judges as upgrades.
 -- Quests under collapsed headers aren't visible to the API, so they're skipped.
+-- Two quest log APIs: the classic one (GetQuestLogTitle, SelectQuestLogEntry) and the modern
+-- C_QuestLog one, which WoW Forever uses (it has no GetQuestLogTitle at all).
 local lastQuestScanEnd = 0
-local function ScanReadyQuests()
-    local result = { count = 0, xp = 0, upgrades = 0, hasXPData = false }
-    if not GetNumQuestLogEntries or not GetQuestLogTitle then return result end
-    local weights, specKey = GetJudgeWeights()
 
-    local prevSelection = GetQuestLogSelection and GetQuestLogSelection() or 0
-    local numEntries = GetNumQuestLogEntries()
-    for i = 1, numEntries do
-        local _, _, _, isHeader, _, isComplete = GetQuestLogTitle(i)
-        if not isHeader and isComplete == 1 then
-            result.count = result.count + 1
-            SelectQuestLogEntry(i)
-
-            if GetQuestLogRewardXP then
-                local ok, xp = pcall(GetQuestLogRewardXP)
-                if ok and xp then
-                    result.xp = result.xp + xp
-                    result.hasXPData = true
-                end
-            end
-
-            -- A choice counts once even if several choices are upgrades
-            if weights then
-                local hasUpgrade = false
-                for _, rewardType in ipairs({ "choice", "reward" }) do
-                    local num = (rewardType == "choice") and GetNumQuestLogChoices() or GetNumQuestLogRewards()
-                    for j = 1, (num or 0) do
-                        local link = GetQuestLogItemLink(rewardType, j)
-                        if link then
-                            local ok, delta = pcall(GetUpgradeDelta, link, weights, specKey)
-                            if ok and delta then hasUpgrade = true end
-                        end
-                    end
-                end
-                if hasUpgrade then result.upgrades = result.upgrades + 1 end
+-- Visits each completed quest with it selected, so the reward functions read that quest.
+-- visit(questID) is called once per completed quest; questID can be nil on old clients.
+local function ForEachCompletedQuest(visit)
+    local QL = C_QuestLog
+    if QL and QL.GetNumQuestLogEntries and QL.GetInfo and QL.IsComplete then
+        local prev = QL.GetSelectedQuest and QL.GetSelectedQuest()
+        for i = 1, QL.GetNumQuestLogEntries() do
+            local info = QL.GetInfo(i)
+            if info and not info.isHeader and info.questID and QL.IsComplete(info.questID) then
+                if QL.SetSelectedQuest then QL.SetSelectedQuest(info.questID) end
+                visit(info.questID)
             end
         end
+        if QL.SetSelectedQuest and prev then QL.SetSelectedQuest(prev) end
+        return true
+    elseif GetNumQuestLogEntries and GetQuestLogTitle and SelectQuestLogEntry then
+        local prev = GetQuestLogSelection and GetQuestLogSelection() or 0
+        for i = 1, GetNumQuestLogEntries() do
+            local _, _, _, isHeader, _, isComplete, _, questID = GetQuestLogTitle(i)
+            if not isHeader and (isComplete == 1 or isComplete == true) then
+                SelectQuestLogEntry(i)
+                visit(questID)
+            end
+        end
+        SelectQuestLogEntry(prev)
+        return true
     end
-    SelectQuestLogEntry(prevSelection)
+    return false
+end
+
+local function ScanReadyQuests()
+    local result = { count = 0, xp = 0, upgrades = 0, hasXPData = false }
+    local weights, specKey = GetJudgeWeights()
+
+    ForEachCompletedQuest(function(questID)
+        result.count = result.count + 1
+
+        if GetQuestLogRewardXP then
+            -- Modern clients take the quest ID; classic ones read the selected quest
+            local ok, xp = pcall(GetQuestLogRewardXP, questID)
+            if not (ok and xp) then ok, xp = pcall(GetQuestLogRewardXP) end
+            if ok and xp then
+                result.xp = result.xp + xp
+                result.hasXPData = true
+            end
+        end
+
+        -- A choice counts once even if several choices are upgrades
+        if weights and GetQuestLogItemLink then
+            local hasUpgrade = false
+            for _, rewardType in ipairs({ "choice", "reward" }) do
+                local okN, num = pcall(rewardType == "choice" and GetNumQuestLogChoices or GetNumQuestLogRewards, questID)
+                for j = 1, (okN and num or 0) do
+                    local link = GetQuestLogItemLink(rewardType, j, questID)
+                    if link then
+                        local ok, delta = pcall(GetUpgradeDelta, link, weights, specKey)
+                        if ok and delta then hasUpgrade = true end
+                    end
+                end
+            end
+            if hasUpgrade then result.upgrades = result.upgrades + 1 end
+        end
+    end)
     lastQuestScanEnd = GetTime()
     return result
 end
@@ -1131,87 +1158,85 @@ end)
 -- SGJ Dynamic Tab Integration
 -- ============================================================================
 
+-- Layout: bar and display toggles (left) | size, opacity and colours (centre) | Gear Judge integration (right)
+local XP_LEFT_W, XP_RIGHT_W = 250, 250
+
 local function BuildXPOptionsTab(parent)
     local f = CreateFrame("Frame", nil, parent)
     f:SetAllPoints()
     f:Hide()
 
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOPLEFT", 40, -30)
-    title:SetText("Experience Tracker Options")
-    title:SetTextColor(1, 0.82, 0)
+    -- Columns
+    local L = CreateFrame("Frame", nil, f)
+    L:SetPoint("TOPLEFT"); L:SetPoint("BOTTOMLEFT"); L:SetWidth(XP_LEFT_W)
+    local R = CreateFrame("Frame", nil, f)
+    R:SetPoint("TOPRIGHT"); R:SetPoint("BOTTOMRIGHT"); R:SetWidth(XP_RIGHT_W)
+    local C = CreateFrame("Frame", nil, f)
+    C:SetPoint("TOPLEFT", L, "TOPRIGHT"); C:SetPoint("BOTTOMRIGHT", R, "BOTTOMLEFT")
+    for _, col in ipairs({ L, R }) do
+        local shade = col:CreateTexture(nil, "BACKGROUND"); shade:SetAllPoints(); shade:SetColorTexture(0, 0, 0, 0.25)
+    end
+    local function Divider(col, side)
+        local t = col:CreateTexture(nil, "BORDER"); t:SetColorTexture(1, 1, 1, 0.08); t:SetWidth(1)
+        t:SetPoint("TOP" .. side, 0, 0); t:SetPoint("BOTTOM" .. side, 0, 0)
+    end
+    Divider(L, "RIGHT"); Divider(R, "LEFT")
 
-    -- 1. Lock Checkbox
-    local LockBox = CreateFrame("CheckButton", nil, f, "ChatConfigCheckButtonTemplate")
-    LockBox:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -20)
-    LockBox.Text:SetText("Lock Frames"); LockBox.Text:SetTextColor(0.9, 0.9, 0.9)
-    LockBox:SetChecked(SGJ_XP_DB.XPBarLocked)
-    LockBox:SetScript("OnClick", function(self) SGJ_XP_DB.XPBarLocked = self:GetChecked() end)
+    local function Header(parentCol, text, sub)
+        local h = parentCol:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        h:SetPoint("TOPLEFT", 14, -12); h:SetText(text); h:SetTextColor(1, 0.82, 0)
+        local s = parentCol:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        s:SetPoint("TOPLEFT", h, "BOTTOMLEFT", 0, -3); s:SetText(sub); s:SetTextColor(0.6, 0.6, 0.6)
+        s:SetWidth(parentCol:GetWidth() - 28); s:SetJustifyH("LEFT")
+        return s
+    end
 
-    -- 2. Hide Blizzard Bar Checkbox
-    local HideBlizzBox = CreateFrame("CheckButton", nil, f, "ChatConfigCheckButtonTemplate")
-    HideBlizzBox:SetPoint("TOPLEFT", LockBox, "BOTTOMLEFT", 0, -10) -- Fixed Spacing
-    HideBlizzBox.Text:SetText("Hide Blizzard XP Bar"); HideBlizzBox.Text:SetTextColor(0.9, 0.9, 0.9)
-    HideBlizzBox:SetChecked(SGJ_XP_DB.HideBlizzardXP)
-    HideBlizzBox:SetScript("OnClick", function(self) SGJ_XP_DB.HideBlizzardXP = self:GetChecked(); UpdateBlizzardBarVisibility() end)
-
-	-- Show XP Bar Toggle
-    local ShowBarBox = CreateFrame("CheckButton", nil, f, "ChatConfigCheckButtonTemplate")
-    ShowBarBox:SetPoint("TOPLEFT", HideBlizzBox, "BOTTOMLEFT", 0, -10) -- Fixed Spacing
-    ShowBarBox.Text:SetText("Show Main XP Bar"); ShowBarBox.Text:SetTextColor(0.9, 0.9, 0.9)
-    ShowBarBox:SetChecked(SGJ_XP_DB.ShowXPBar)
-    ShowBarBox:SetScript("OnClick", function(self) SGJ_XP_DB.ShowXPBar = self:GetChecked(); UpdateBar() end)
-
-    -- Show Stats Box Toggle
-    local ShowStatsBox = CreateFrame("CheckButton", nil, f, "ChatConfigCheckButtonTemplate")
-    ShowStatsBox:SetPoint("TOPLEFT", ShowBarBox, "BOTTOMLEFT", 0, -10) -- Fixed Spacing
-    ShowStatsBox.Text:SetText("Show Standalone Stats Box"); ShowStatsBox.Text:SetTextColor(0.9, 0.9, 0.9)
-    ShowStatsBox:SetChecked(SGJ_XP_DB.ShowStatsBox)
-    ShowStatsBox:SetScript("OnClick", function(self) SGJ_XP_DB.ShowStatsBox = self:GetChecked(); UpdateBar() end)
-
-    -- 3. NEW: Auto-Hide in Combat Checkbox
-    local CombatBox = CreateFrame("CheckButton", nil, f, "ChatConfigCheckButtonTemplate")
-    CombatBox:SetPoint("TOPLEFT", ShowStatsBox, "BOTTOMLEFT", 0, -10) -- Fixed Spacing
-    CombatBox.Text:SetText("Auto-Hide During Combat"); CombatBox.Text:SetTextColor(0.9, 0.9, 0.9)
-    CombatBox:SetChecked(SGJ_XP_DB.HideInCombat)
-    CombatBox:SetScript("OnClick", function(self) SGJ_XP_DB.HideInCombat = self:GetChecked() end)
-
-    -- 4. NEW: Milestone Ticks Checkbox
-    local TicksBox = CreateFrame("CheckButton", nil, f, "ChatConfigCheckButtonTemplate")
-    TicksBox:SetPoint("TOPLEFT", CombatBox, "BOTTOMLEFT", 0, -10)
-    TicksBox.Text:SetText("Show 20-Segment Brackets (Classic Style)"); TicksBox.Text:SetTextColor(0.9, 0.9, 0.9)
-    TicksBox:SetChecked(SGJ_XP_DB.ShowTicks)
-    TicksBox:SetScript("OnClick", function(self)
-        SGJ_XP_DB.ShowTicks = self:GetChecked()
-        UpdateTicks() -- Redraws immediately
-    end)
-
-    -- Gear Judge Integration (right column)
-    local gearTitle = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    gearTitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 300, -6)
-    gearTitle:SetText("Gear Judge Integration")
-    gearTitle:SetTextColor(1, 0.82, 0)
-
-    local function CreateGearToggle(label, dbKey, anchor, onChange)
-        local box = CreateFrame("CheckButton", nil, f, "ChatConfigCheckButtonTemplate")
+    -- A checkbox in a column, under the given anchor; long labels wrap inside the column
+    local function Check(parentCol, label, checked, anchor, onClick)
+        local box = CreateFrame("CheckButton", nil, parentCol, "ChatConfigCheckButtonTemplate")
         box:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -10)
         box.Text:SetText(label); box.Text:SetTextColor(0.9, 0.9, 0.9)
-        box:SetChecked(SGJ_XP_DB[dbKey])
-        box:SetScript("OnClick", function(self)
-            SGJ_XP_DB[dbKey] = self:GetChecked()
-            if onChange then onChange() end
-        end)
+        box.Text:SetWidth(parentCol:GetWidth() - 60); box.Text:SetJustifyH("LEFT")
+        box:SetChecked(checked)
+        box:SetScript("OnClick", onClick)
         return box
     end
 
-    local UnlocksBox = CreateGearToggle("Show Level-Locked Upgrades", "ShowUnlocks", gearTitle, UpdateBar)
-    local DingBox = CreateGearToggle("Level-Up Gear Alert", "DingAlert", UnlocksBox)
-    local BandBox = CreateGearToggle("Warn Before Weights Change", "ShowBandWarning", DingBox)
-    CreateGearToggle("Show Quest Turn-In Projection", "ShowQuestProjection", BandBox, UpdateBar)
+    -- ==========================================
+    -- LEFT: BAR AND DISPLAY
+    -- ==========================================
+    local leftSub = Header(L, "Experience Tracker", "What the XP bar shows and when.")
+
+    -- 1. Lock Checkbox
+    local LockBox = Check(L, "Lock Frames", SGJ_XP_DB.XPBarLocked, leftSub,
+        function(self) SGJ_XP_DB.XPBarLocked = self:GetChecked() end)
+
+    -- 2. Hide Blizzard Bar Checkbox
+    local HideBlizzBox = Check(L, "Hide Blizzard XP Bar", SGJ_XP_DB.HideBlizzardXP, LockBox,
+        function(self) SGJ_XP_DB.HideBlizzardXP = self:GetChecked(); UpdateBlizzardBarVisibility() end)
+
+	-- Show XP Bar Toggle
+    local ShowBarBox = Check(L, "Show Main XP Bar", SGJ_XP_DB.ShowXPBar, HideBlizzBox,
+        function(self) SGJ_XP_DB.ShowXPBar = self:GetChecked(); UpdateBar() end)
+
+    -- Show Stats Box Toggle
+    local ShowStatsBox = Check(L, "Show Standalone Stats Box", SGJ_XP_DB.ShowStatsBox, ShowBarBox,
+        function(self) SGJ_XP_DB.ShowStatsBox = self:GetChecked(); UpdateBar() end)
+
+    -- 3. Auto-Hide in Combat Checkbox
+    local CombatBox = Check(L, "Auto-Hide During Combat", SGJ_XP_DB.HideInCombat, ShowStatsBox,
+        function(self) SGJ_XP_DB.HideInCombat = self:GetChecked() end)
+
+    -- 4. Milestone Ticks Checkbox
+    local TicksBox = Check(L, "Show 20-Segment Brackets (Classic Style)", SGJ_XP_DB.ShowTicks, CombatBox,
+        function(self)
+            SGJ_XP_DB.ShowTicks = self:GetChecked()
+            UpdateTicks() -- Redraws immediately
+        end)
 
     -- 5. Cycle Text Format Button
-    local FormatBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    FormatBtn:SetSize(140, 25)
+    local FormatBtn = CreateFrame("Button", nil, L, "UIPanelButtonTemplate")
+    FormatBtn:SetSize(160, 25)
     FormatBtn:SetPoint("TOPLEFT", TicksBox, "BOTTOMLEFT", 0, -20)
     local formatCycle = {"BOTH", "RAW", "PERCENT", "NONE"}
 
@@ -1225,10 +1250,26 @@ local function BuildXPOptionsTab(parent)
         SGJ_XP_DB.XPTextFormat = formatCycle[nextIdx]
         UpdateFormatBtn(); UpdateBar()
     end)
+    FormatBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText("Bar Text")
+        GameTooltip:AddLine("Click to cycle: both, raw XP, percent, or none.", 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    FormatBtn:SetScript("OnLeave", GameTooltip_Hide)
+
+    -- ==========================================
+    -- CENTRE: SIZE, OPACITY AND COLOURS
+    -- ==========================================
+    local centerW = 830 - XP_LEFT_W - XP_RIGHT_W
+    local sliderW = centerW - 60
+
+    local lookHdr = C:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    lookHdr:SetPoint("TOPLEFT", 20, -12); lookHdr:SetText("Size and Look"); lookHdr:SetTextColor(1, 0.82, 0)
 
     -- 6. Width Slider
-    local WidthSlider = CreateFrame("Slider", "SGJ_XPWidthSlider", f, "OptionsSliderTemplate")
-    WidthSlider:SetPoint("TOPLEFT", FormatBtn, "BOTTOMLEFT", 0, -40)
+    local WidthSlider = CreateFrame("Slider", "SGJ_XPWidthSlider", C, "OptionsSliderTemplate")
+    WidthSlider:SetWidth(sliderW)
+    WidthSlider:SetPoint("TOPLEFT", lookHdr, "BOTTOMLEFT", 10, -34)
     WidthSlider:SetMinMaxValues(100, 1000); WidthSlider:SetValueStep(5); WidthSlider:SetObeyStepOnDrag(true)
     _G[WidthSlider:GetName() .. 'Low']:SetText('100'); _G[WidthSlider:GetName() .. 'High']:SetText('1000')
     _G[WidthSlider:GetName() .. 'Text']:SetText('Bar Width: ' .. SGJ_XP_DB.XPBarWidth .. 'px')
@@ -1244,7 +1285,8 @@ local function BuildXPOptionsTab(parent)
     end)
 
     -- 7. Height Slider
-    local HeightSlider = CreateFrame("Slider", "SGJ_XPHeightSlider", f, "OptionsSliderTemplate")
+    local HeightSlider = CreateFrame("Slider", "SGJ_XPHeightSlider", C, "OptionsSliderTemplate")
+    HeightSlider:SetWidth(sliderW)
     HeightSlider:SetPoint("TOPLEFT", WidthSlider, "BOTTOMLEFT", 0, -40)
     HeightSlider:SetMinMaxValues(5, 50); HeightSlider:SetValueStep(1); HeightSlider:SetObeyStepOnDrag(true)
     _G[HeightSlider:GetName() .. 'Low']:SetText('5'); _G[HeightSlider:GetName() .. 'High']:SetText('50')
@@ -1260,8 +1302,9 @@ local function BuildXPOptionsTab(parent)
         SGJ_XP_DB.XPBarHeight = value
     end)
 
-    -- 8. NEW: Background Opacity Slider
-    local OpacitySlider = CreateFrame("Slider", "SGJ_XPOpacitySlider", f, "OptionsSliderTemplate")
+    -- 8. Background Opacity Slider
+    local OpacitySlider = CreateFrame("Slider", "SGJ_XPOpacitySlider", C, "OptionsSliderTemplate")
+    OpacitySlider:SetWidth(sliderW)
     OpacitySlider:SetPoint("TOPLEFT", HeightSlider, "BOTTOMLEFT", 0, -40)
     OpacitySlider:SetMinMaxValues(0, 1); OpacitySlider:SetValueStep(0.1); OpacitySlider:SetObeyStepOnDrag(true)
     _G[OpacitySlider:GetName() .. 'Low']:SetText('0%'); _G[OpacitySlider:GetName() .. 'High']:SetText('100%')
@@ -1276,17 +1319,17 @@ local function BuildXPOptionsTab(parent)
 
 	-- Helper function to create uniform color buttons
     local function CreateColorSwatch(name, dbKey, anchorFrame, xOff, yOff, updateAction)
-        local btn = CreateFrame("Button", nil, f)
+        local btn = CreateFrame("Button", nil, C)
         btn:SetSize(20, 20)
         btn:SetPoint("TOPLEFT", anchorFrame, "BOTTOMLEFT", xOff, yOff)
 
         -- The solid color square
-        btn.ColorTex = btn:CreateTexture(nil, "BACKGROUND")
-        btn.ColorTex:SetAllPoints()
+        btn.ColorTex = btn:CreateTexture(nil, "ARTWORK")
+        btn.ColorTex:SetPoint("TOPLEFT", 2, -2); btn.ColorTex:SetPoint("BOTTOMRIGHT", -2, 2)
         btn.ColorTex:SetColorTexture(unpack(SGJ_XP_DB[dbKey]))
 
         -- The Blizzard border for swatches
-        btn.Border = btn:CreateTexture(nil, "OVERLAY")
+        btn.Border = btn:CreateTexture(nil, "BACKGROUND")
         btn.Border:SetTexture("Interface\\ChatFrame\\ChatFrameColorSwatch")
         btn.Border:SetPoint("CENTER")
         btn.Border:SetSize(24, 24)
@@ -1309,15 +1352,31 @@ local function BuildXPOptionsTab(parent)
         return btn
     end
 
-    -- Create the Color Grid
-    -- Left Column
-    local cNormal = CreateColorSwatch("Normal Bar Color", "NormalColor", OpacitySlider, 0, -25, UpdateBar)
-    local cTicks = CreateColorSwatch("Milestone Ticks", "TickColor", cNormal, 0, -15, UpdateTicks)
-    CreateColorSwatch("Quest Turn-In Color", "QuestColor", cTicks, 0, -15, UpdateBar)
+    -- Colours, one list under the sliders
+    local colorHdr = C:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    colorHdr:SetPoint("TOPLEFT", OpacitySlider, "BOTTOMLEFT", -10, -30); colorHdr:SetText("Colors"); colorHdr:SetTextColor(1, 0.82, 0)
+    local cNormal = CreateColorSwatch("Normal Bar Color", "NormalColor", colorHdr, 2, -12, UpdateBar)
+    local cRested = CreateColorSwatch("Rested Bar Color", "RestedColor", cNormal, 0, -12, UpdateBar)
+    local cQuest = CreateColorSwatch("Quest Turn-In Color", "QuestColor", cRested, 0, -12, UpdateBar)
+    local cTicks = CreateColorSwatch("Milestone Ticks", "TickColor", cQuest, 0, -12, UpdateTicks)
+    CreateColorSwatch("Text Color", "TextColor", cTicks, 0, -12, UpdateBar)
 
-    -- Right Column
-    local cRested = CreateColorSwatch("Rested Bar Color", "RestedColor", OpacitySlider, 150, -25, UpdateBar)
-    local cText = CreateColorSwatch("Text Color", "TextColor", cRested, 0, -15, UpdateBar)
+    -- ==========================================
+    -- RIGHT: GEAR JUDGE INTEGRATION
+    -- ==========================================
+    local rightSub = Header(R, "Gear Judge Integration", "Gear hints on the XP bar and at level-up.")
+
+    local function CreateGearToggle(label, dbKey, anchor, onChange)
+        return Check(R, label, SGJ_XP_DB[dbKey], anchor, function(self)
+            SGJ_XP_DB[dbKey] = self:GetChecked()
+            if onChange then onChange() end
+        end)
+    end
+
+    local UnlocksBox = CreateGearToggle("Show Level-Locked Upgrades", "ShowUnlocks", rightSub, UpdateBar)
+    local DingBox = CreateGearToggle("Level-Up Gear Alert", "DingAlert", UnlocksBox)
+    local BandBox = CreateGearToggle("Warn Before Weights Change", "ShowBandWarning", DingBox)
+    CreateGearToggle("Show Quest Turn-In Projection", "ShowQuestProjection", BandBox, UpdateBar)
 
     _G.MSC.ViewXPTracker = f
 end
