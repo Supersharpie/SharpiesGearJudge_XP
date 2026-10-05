@@ -770,6 +770,15 @@ local function UpdateStatsBox()
     local y = -30
     for i, entry in ipairs(lines) do
         local left, right = GetStatsRow(i)
+        -- The box redraws every second but usually only the session time changes:
+        -- leave rows whose content and position are the same as last time
+        local row = SGJ_Stats.Lines[i]
+        local sig = entry.blank and ("b" .. y) or (y .. "\1" .. tostring(entry[1]) .. "\1" .. tostring(entry[2]) .. "\1"
+            .. tostring(entry[3]) .. "," .. tostring(entry[4]) .. "," .. tostring(entry[5]) .. "," .. tostring(entry[6]) .. "," .. tostring(entry[7]) .. "," .. tostring(entry[8]))
+        if row.sig == sig then
+            y = y - (entry.blank and 8 or 15)
+        else
+        row.sig = sig
         left:ClearAllPoints(); right:ClearAllPoints()
         left:SetText(""); right:SetText("")
         if entry.blank then
@@ -793,12 +802,14 @@ local function UpdateStatsBox()
             end
             y = y - 15
         end
+        end
     end
 
     -- Clear rows left over from a longer update
     for i = #lines + 1, #SGJ_Stats.Lines do
         SGJ_Stats.Lines[i][1]:SetText("")
         SGJ_Stats.Lines[i][2]:SetText("")
+        SGJ_Stats.Lines[i].sig = nil
     end
     SGJ_Stats:SetHeight(-y + 10)
 end

@@ -4,6 +4,9 @@
 ### 🌍 Translations
 - **Translated**: The XP Bar is now translated into every language WoW Forever launches with: German, Spanish (Spain and Latin America), French, Brazilian Portuguese, Russian, Korean and Traditional Chinese.
 
+### ⚡ Performance
+- **Lighter Stats Box**: The stats box redraws every second to keep the session timer ticking, and it re-laid out every line each time. Now only the lines that changed are redrawn (usually just the session time).
+
 ---
 ## 🚀 v1.1.2
 ### 🖼️ Options Redesigned for the Bigger Window
