@@ -3,6 +3,7 @@
 -- ============================================================================
 
 local addonName, _ = ...
+local L = (_G.MSC and _G.MSC.L) or setmetatable({}, { __index = function(t, k) return k end })
 
 -- Container API moved to C_Container on newer clients
 local GetContainerNumSlots = C_Container and C_Container.GetContainerNumSlots or GetContainerNumSlots
@@ -74,7 +75,7 @@ function SGJ_ResetXPSession()
     killBaseXPTotal = 0
     questCount = 0
     questXPTotal = 0
-    print("|cffa335ee[SGJ XP]|r Session Tracker Reset.")
+    print("|cffa335ee[SGJ XP]|r " .. L["Session Tracker Reset."])
     if SGJ_ExperienceBar then
         SGJ_ExperienceBar:GetScript("OnEvent")(SGJ_ExperienceBar, "PLAYER_XP_UPDATE")
     end
@@ -158,7 +159,7 @@ SGJ_Stats:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
 
 SGJ_Stats.Title = SGJ_Stats:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 SGJ_Stats.Title:SetPoint("TOP", 0, -10)
-SGJ_Stats.Title:SetText("SGJ Experience")
+SGJ_Stats.Title:SetText(L["SGJ Experience"])
 
 -- Tooltip-style double-line rows, created as needed (the box shows the same lines as the bar's tooltip)
 SGJ_Stats.Lines = {}
@@ -212,7 +213,7 @@ SGJ_Ding.Body:SetWidth(300)
 SGJ_Ding.Body:SetJustifyH("CENTER")
 SGJ_Ding.Hint = SGJ_Ding:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
 SGJ_Ding.Hint:SetPoint("BOTTOM", 0, 8)
-SGJ_Ding.Hint:SetText("Click to open bags  -  Right-click to dismiss")
+SGJ_Ding.Hint:SetText(L["Click to open bags  -  Right-click to dismiss"])
 SGJ_Ding:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 SGJ_Ding:SetScript("OnClick", function(self, button)
     if button == "LeftButton" then
@@ -501,8 +502,8 @@ end
 
 local function FormatWeightChange(c)
     local name = _G.MSC.GetCleanStatName(c.stat)
-    if c.to == 0 then return name .. ": |cffff5555no longer valued|r" end
-    if c.from == 0 then return name .. ": |cff55ff55now valued|r (" .. c.to .. ")" end
+    if c.to == 0 then return string.format(L["%s: |cffff5555no longer valued|r"], name) end
+    if c.from == 0 then return string.format(L["%s: |cff55ff55now valued|r (%s)"], name, c.to) end
     local color = (c.to > c.from) and "|cff55ff55" or "|cffff5555"
     return string.format("%s: %s -> %s%s|r", name, c.from, color, c.to)
 end
@@ -619,12 +620,12 @@ local function GetXPData()
     local timePlayed = (GetTime() - sessionStartTime) / 3600
     local xpPerHour = (timePlayed > 0) and (totalXPGainedSession / timePlayed) or 0
 
-    local timeToLevelStr = "Need data..."
+    local timeToLevelStr = L["Need data..."]
     if xpPerHour > 0 then
         local hoursToLevel = remainingXP / xpPerHour
         local h = math.floor(hoursToLevel)
         local m = math.floor((hoursToLevel - h) * 60)
-        timeToLevelStr = string.format("%dh %dm", h, m)
+        timeToLevelStr = string.format(L["%dh %dm"], h, m)
     end
 
     -- Calculate Averages
@@ -649,11 +650,11 @@ end
 
 local function FormatQuestLine()
     local maxXP = UnitXPMax("player") or 1
-    local noun = (readyQuests.count == 1) and "quest" or "quests"
+    local one = (readyQuests.count == 1)
     if readyQuests.hasXPData then
-        return string.format("%d %s = %.0f%% of a level", readyQuests.count, noun, (readyQuests.xp / maxXP) * 100)
+        return string.format(one and L["%d quest = %.0f%% of a level"] or L["%d quests = %.0f%% of a level"], readyQuests.count, (readyQuests.xp / maxXP) * 100)
     end
-    return string.format("%d %s", readyQuests.count, noun)
+    return string.format(one and L["%d quest"] or L["%d quests"], readyQuests.count)
 end
 
 -- Builds the lines shown in both the bar's tooltip and the stats box, so the two always match.
@@ -668,13 +669,13 @@ local function BuildInfoLines()
 
     local current, maxXP, remaining, xpPerHour, timeToLevelStr, avgKillXP, killsToLevel, avgQuestXP, questsToLevel, timePlayed = GetXPData()
 
-    Double("Current XP:", string.format("%d / %d", current, maxXP), 1, 1, 1)
-    Double("Remaining:", remaining, 1, 1, 1)
+    Double(L["Current XP:"], string.format("%d / %d", current, maxXP), 1, 1, 1)
+    Double(L["Remaining:"], remaining, 1, 1, 1)
     local restedXP, coverage, restedKills = GetRestedPlan(remaining)
     if restedXP then
-        Double("Rested XP:", string.format("%d (%.1f%%)", restedXP, (restedXP / maxXP) * 100), 0.2, 0.4, 1.0)
-        local plan = string.format("Covers %.0f%% of this level", coverage * 100)
-        if restedKills then plan = plan .. string.format(" (~%d kills)", restedKills) end
+        Double(L["Rested XP:"], string.format("%d (%.1f%%)", restedXP, (restedXP / maxXP) * 100), 0.2, 0.4, 1.0)
+        local plan = string.format(L["Covers %.0f%% of this level"], coverage * 100)
+        if restedKills then plan = plan .. string.format(L[" (~%d kills)"], restedKills) end
         Single(plan, 0.6, 0.7, 1.0)
     end
     Blank()
@@ -682,60 +683,60 @@ local function BuildInfoLines()
     local h = math.floor(timePlayed)
     local m = math.floor((timePlayed - h) * 60)
     local sec = math.floor(((timePlayed - h) * 3600) % 60)
-    Double("Session Time:", string.format("%dh %02dm %02ds", h, m, sec), 0.8, 0.8, 0.8, 0.8, 0.8, 0.8)
-    Double("Overall XP / Hour:", string.format("%.0f", xpPerHour), 0.2, 1, 0.2)
-    Double("Est. Time to Level:", timeToLevelStr, 0.2, 0.8, 1)
+    Double(L["Session Time:"], string.format(L["%dh %02dm %02ds"], h, m, sec), 0.8, 0.8, 0.8, 0.8, 0.8, 0.8)
+    Double(L["Overall XP / Hour:"], string.format("%.0f", xpPerHour), 0.2, 1, 0.2)
+    Double(L["Est. Time to Level:"], timeToLevelStr, 0.2, 0.8, 1)
     Blank()
 
     if killCount > 0 then
-        Double(string.format("Kills (%d tracked):", killCount), string.format("~%d to level", killsToLevel), 1, 0.8, 0)
+        Double(string.format(L["Kills (%d tracked):"], killCount), string.format(L["~%d to level"], killsToLevel), 1, 0.8, 0)
     else
-        Double("Kills:", "Need data...", 0.5, 0.5, 0.5)
+        Double(L["Kills:"], L["Need data..."], 0.5, 0.5, 0.5)
     end
 
     if questCount > 0 then
-        Double(string.format("Quests (%d tracked):", questCount), string.format("~%d to level", questsToLevel), 1, 0.8, 0)
+        Double(string.format(L["Quests (%d tracked):"], questCount), string.format(L["~%d to level"], questsToLevel), 1, 0.8, 0)
     else
-        Double("Quests:", "Need data...", 0.5, 0.5, 0.5)
+        Double(L["Quests:"], L["Need data..."], 0.5, 0.5, 0.5)
     end
 
     -- Completed quests waiting in the log
     if readyQuests.count > 0 then
         Blank()
-        Double("Ready to Turn In:", FormatQuestLine(), 1, 0.82, 0)
+        Double(L["Ready to Turn In:"], FormatQuestLine(), 1, 0.82, 0)
         if readyQuests.hasXPData and readyQuests.xp >= remaining then
-            Single("Turning these in will level you up!", 0.2, 1, 0.2)
+            Single(L["Turning these in will level you up!"], 0.2, 1, 0.2)
         end
         if readyQuests.upgrades > 0 then
-            Single(string.format("%d of them reward%s an upgrade", readyQuests.upgrades, readyQuests.upgrades == 1 and "s" or ""), 0.2, 1, 0.2)
+            Single(string.format(readyQuests.upgrades == 1 and L["%d of them rewards an upgrade"] or L["%d of them reward an upgrade"], readyQuests.upgrades), 0.2, 1, 0.2)
         end
     end
 
     -- Level-locked upgrades in your bags
     if SGJ_XP_DB.ShowUnlocks and #lockedUpgrades > 0 then
         Blank()
-        Single("Upgrades Waiting in Your Bags", 0.2, 1, 0.2)
+        Single(L["Upgrades Waiting in Your Bags"], 0.2, 1, 0.2)
         for i = 1, math.min(5, #lockedUpgrades) do
             local item = lockedUpgrades[i]
-            local right = string.format("Lvl %d  |cff55ff55+%.1f|r", item.minLevel, item.delta)
-            if item.train then right = string.format("Train %s at %d  |cff55ff55+%.1f|r", item.train, item.minLevel, item.delta) end
+            local right = string.format(L["Lvl %d  |cff55ff55+%.1f|r"], item.minLevel, item.delta)
+            if item.train then right = string.format(L["Train %s at %d  |cff55ff55+%.1f|r"], item.train, item.minLevel, item.delta) end
             Double(item.link, right, 1, 1, 1)
         end
         if #lockedUpgrades > 5 then
-            Single(string.format("...and %d more", #lockedUpgrades - 5), 0.6, 0.6, 0.6)
+            Single(string.format(L["...and %d more"], #lockedUpgrades - 5), 0.6, 0.6, 0.6)
         end
     end
 
     -- Upcoming weight profile change
     if SGJ_XP_DB.ShowBandWarning and bandShift then
         Blank()
-        local when = (bandShift.levelsAway == 1) and "next level" or string.format("in %d levels", bandShift.levelsAway)
-        Single(string.format("Stat Weights Change at %d (%s)", bandShift.level, when), 1, 0.5, 0)
-        Single("Likely profile: " .. bandShift.name, 0.8, 0.8, 0.8)
+        local when = (bandShift.levelsAway == 1) and L["next level"] or string.format(L["in %d levels"], bandShift.levelsAway)
+        Single(string.format(L["Stat Weights Change at %d (%s)"], bandShift.level, when), 1, 0.5, 0)
+        Single(string.format(L["Likely profile: %s"], bandShift.name), 0.8, 0.8, 0.8)
         for i = 1, math.min(4, #bandShift.changes) do
             Single("  " .. FormatWeightChange(bandShift.changes[i]), 1, 1, 1)
         end
-        Single("Items that are close calls now may re-rank.", 0.6, 0.6, 0.6)
+        Single(L["Items that are close calls now may re-rank."], 0.6, 0.6, 0.6)
     end
 
     -- Gear score progress
@@ -743,11 +744,11 @@ local function BuildInfoLines()
         Blank()
         local gain = GetGearScoreGainThisLevel()
         local gainColor = (gain > 0) and "|cff55ff55" or "|cff999999"
-        Double("Gear Score:", string.format("%.1f  %s(%+.1f this level)|r", gearScore, gainColor, gain), 0.6, 0.8, 1)
+        Double(L["Gear Score:"], string.format(L["%.1f  %s(%+.1f this level)|r"], gearScore, gainColor, gain), 0.6, 0.8, 1)
     end
 
     Blank()
-    Single("Shift-click to reset the session", 0.5, 0.5, 0.5)
+    Single(L["Shift-click to reset the session"], 0.5, 0.5, 0.5)
     return lines
 end
 
@@ -911,24 +912,24 @@ local function RunDingCheck(oldLevel, newLevel)
     local unspent = UnitCharacterPoints and UnitCharacterPoints("player") or 0
     local lines = {}
     if #ready > 0 then
-        table.insert(lines, string.format("|cff55ff55%d upgrade%s now equippable|r", #ready, #ready > 1 and "s" or ""))
-        print(string.format("|cffa335ee[SGJ XP]|r Ding! Level %d unlocked these upgrades in your bags:", newLevel))
+        table.insert(lines, string.format(#ready > 1 and L["|cff55ff55%d upgrades now equippable|r"] or L["|cff55ff55%d upgrade now equippable|r"], #ready))
+        print("|cffa335ee[SGJ XP]|r " .. string.format(L["Ding! Level %d unlocked these upgrades in your bags:"], newLevel))
         local trainNeeded
         for _, item in ipairs(ready) do
-            local note = item.train and string.format("  |cffffd100(train %s first)|r", item.train) or ""
+            local note = item.train and ("  |cffffd100" .. string.format(L["(train %s first)"], item.train) .. "|r") or ""
             print(string.format("   %s  |cff55ff55(+%.1f)|r%s", item.link, item.delta, note))
             trainNeeded = trainNeeded or item.train
         end
         if trainNeeded then
-            table.insert(lines, string.format("|cffffd100Visit your trainer to learn %s|r", trainNeeded))
+            table.insert(lines, string.format(L["|cffffd100Visit your trainer to learn %s|r"], trainNeeded))
         end
     end
     if unspent and unspent > 0 then
-        table.insert(lines, string.format("|cffffd100%d unspent talent point%s|r (talents change your weights)", unspent, unspent > 1 and "s" or ""))
+        table.insert(lines, string.format(unspent > 1 and L["|cffffd100%d unspent talent points|r (talents change your weights)"] or L["|cffffd100%d unspent talent point|r (talents change your weights)"], unspent))
     end
     if #lines == 0 then return end
 
-    SGJ_Ding.Title:SetText(string.format("Ding! Level %d", newLevel))
+    SGJ_Ding.Title:SetText(string.format(L["Ding! Level %d"], newLevel))
     SGJ_Ding.Body:SetText(table.concat(lines, "\n"))
     SGJ_Ding:SetHeight(50 + SGJ_Ding.Body:GetStringHeight() + 14)
     SGJ_Ding:ClearAllPoints()
@@ -946,7 +947,7 @@ end
 -- Bar tooltip (same lines as the stats box)
 local function ShowXPTooltip(owner)
     GameTooltip:SetOwner(owner, "ANCHOR_TOP")
-    GameTooltip:AddLine("SGJ Experience", unpack(SGJ_XP_DB.NormalColor))
+    GameTooltip:AddLine(L["SGJ Experience"], unpack(SGJ_XP_DB.NormalColor))
     for _, entry in ipairs(BuildInfoLines()) do
         if entry.blank then
             GameTooltip:AddLine(" ")
@@ -986,8 +987,8 @@ SGJ_XP.Unlock:SetScript("OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_TOP")
     GameTooltip:SetHyperlink(item.link)
     GameTooltip:AddLine(" ")
-    GameTooltip:AddLine(string.format("Unlocks at level %d: |cff55ff55+%.1f|r score", item.minLevel, item.delta), 0.2, 1, 0.2)
-    if item.train then GameTooltip:AddLine(string.format("Train %s at your class trainer first", item.train), 1, 0.82, 0) end
+    GameTooltip:AddLine(string.format(L["Unlocks at level %d: |cff55ff55+%.1f|r score"], item.minLevel, item.delta), 0.2, 1, 0.2)
+    if item.train then GameTooltip:AddLine(string.format(L["Train %s at your class trainer first"], item.train), 1, 0.82, 0) end
     GameTooltip:Show()
 end)
 SGJ_XP.Unlock:SetScript("OnLeave", function(self) GameTooltip:Hide() end)
@@ -1167,20 +1168,20 @@ local function BuildXPOptionsTab(parent)
     f:Hide()
 
     -- Columns
-    local L = CreateFrame("Frame", nil, f)
-    L:SetPoint("TOPLEFT"); L:SetPoint("BOTTOMLEFT"); L:SetWidth(XP_LEFT_W)
+    local LeftCol = CreateFrame("Frame", nil, f)
+    LeftCol:SetPoint("TOPLEFT"); LeftCol:SetPoint("BOTTOMLEFT"); LeftCol:SetWidth(XP_LEFT_W)
     local R = CreateFrame("Frame", nil, f)
     R:SetPoint("TOPRIGHT"); R:SetPoint("BOTTOMRIGHT"); R:SetWidth(XP_RIGHT_W)
     local C = CreateFrame("Frame", nil, f)
-    C:SetPoint("TOPLEFT", L, "TOPRIGHT"); C:SetPoint("BOTTOMRIGHT", R, "BOTTOMLEFT")
-    for _, col in ipairs({ L, R }) do
+    C:SetPoint("TOPLEFT", LeftCol, "TOPRIGHT"); C:SetPoint("BOTTOMRIGHT", R, "BOTTOMLEFT")
+    for _, col in ipairs({ LeftCol, R }) do
         local shade = col:CreateTexture(nil, "BACKGROUND"); shade:SetAllPoints(); shade:SetColorTexture(0, 0, 0, 0.25)
     end
     local function Divider(col, side)
         local t = col:CreateTexture(nil, "BORDER"); t:SetColorTexture(1, 1, 1, 0.08); t:SetWidth(1)
         t:SetPoint("TOP" .. side, 0, 0); t:SetPoint("BOTTOM" .. side, 0, 0)
     end
-    Divider(L, "RIGHT"); Divider(R, "LEFT")
+    Divider(LeftCol, "RIGHT"); Divider(R, "LEFT")
 
     local function Header(parentCol, text, sub)
         local h = parentCol:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -1205,42 +1206,42 @@ local function BuildXPOptionsTab(parent)
     -- ==========================================
     -- LEFT: BAR AND DISPLAY
     -- ==========================================
-    local leftSub = Header(L, "Experience Tracker", "What the XP bar shows and when.")
+    local leftSub = Header(LeftCol, L["Experience Tracker"], L["What the XP bar shows and when."])
 
     -- 1. Lock Checkbox
-    local LockBox = Check(L, "Lock Frames", SGJ_XP_DB.XPBarLocked, leftSub,
+    local LockBox = Check(LeftCol, L["Lock Frames"], SGJ_XP_DB.XPBarLocked, leftSub,
         function(self) SGJ_XP_DB.XPBarLocked = self:GetChecked() end)
 
     -- 2. Hide Blizzard Bar Checkbox
-    local HideBlizzBox = Check(L, "Hide Blizzard XP Bar", SGJ_XP_DB.HideBlizzardXP, LockBox,
+    local HideBlizzBox = Check(LeftCol, L["Hide Blizzard XP Bar"], SGJ_XP_DB.HideBlizzardXP, LockBox,
         function(self) SGJ_XP_DB.HideBlizzardXP = self:GetChecked(); UpdateBlizzardBarVisibility() end)
 
 	-- Show XP Bar Toggle
-    local ShowBarBox = Check(L, "Show Main XP Bar", SGJ_XP_DB.ShowXPBar, HideBlizzBox,
+    local ShowBarBox = Check(LeftCol, L["Show Main XP Bar"], SGJ_XP_DB.ShowXPBar, HideBlizzBox,
         function(self) SGJ_XP_DB.ShowXPBar = self:GetChecked(); UpdateBar() end)
 
     -- Show Stats Box Toggle
-    local ShowStatsBox = Check(L, "Show Standalone Stats Box", SGJ_XP_DB.ShowStatsBox, ShowBarBox,
+    local ShowStatsBox = Check(LeftCol, L["Show Standalone Stats Box"], SGJ_XP_DB.ShowStatsBox, ShowBarBox,
         function(self) SGJ_XP_DB.ShowStatsBox = self:GetChecked(); UpdateBar() end)
 
     -- 3. Auto-Hide in Combat Checkbox
-    local CombatBox = Check(L, "Auto-Hide During Combat", SGJ_XP_DB.HideInCombat, ShowStatsBox,
+    local CombatBox = Check(LeftCol, L["Auto-Hide During Combat"], SGJ_XP_DB.HideInCombat, ShowStatsBox,
         function(self) SGJ_XP_DB.HideInCombat = self:GetChecked() end)
 
     -- 4. Milestone Ticks Checkbox
-    local TicksBox = Check(L, "Show 20-Segment Brackets (Classic Style)", SGJ_XP_DB.ShowTicks, CombatBox,
+    local TicksBox = Check(LeftCol, L["Show 20-Segment Brackets (Classic Style)"], SGJ_XP_DB.ShowTicks, CombatBox,
         function(self)
             SGJ_XP_DB.ShowTicks = self:GetChecked()
             UpdateTicks() -- Redraws immediately
         end)
 
     -- 5. Cycle Text Format Button
-    local FormatBtn = CreateFrame("Button", nil, L, "UIPanelButtonTemplate")
+    local FormatBtn = CreateFrame("Button", nil, LeftCol, "UIPanelButtonTemplate")
     FormatBtn:SetSize(160, 25)
     FormatBtn:SetPoint("TOPLEFT", TicksBox, "BOTTOMLEFT", 0, -20)
     local formatCycle = {"BOTH", "RAW", "PERCENT", "NONE"}
 
-    local function UpdateFormatBtn() FormatBtn:SetText("Text: " .. (SGJ_XP_DB.XPTextFormat or "BOTH")) end
+    local function UpdateFormatBtn() FormatBtn:SetText(string.format(L["Text: %s"], L[SGJ_XP_DB.XPTextFormat or "BOTH"])) end
     UpdateFormatBtn()
 
     FormatBtn:SetScript("OnClick", function()
@@ -1251,8 +1252,8 @@ local function BuildXPOptionsTab(parent)
         UpdateFormatBtn(); UpdateBar()
     end)
     FormatBtn:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText("Bar Text")
-        GameTooltip:AddLine("Click to cycle: both, raw XP, percent, or none.", 1, 1, 1)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText(L["Bar Text"])
+        GameTooltip:AddLine(L["Click to cycle: both, raw XP, percent, or none."], 1, 1, 1)
         GameTooltip:Show()
     end)
     FormatBtn:SetScript("OnLeave", GameTooltip_Hide)
@@ -1264,7 +1265,7 @@ local function BuildXPOptionsTab(parent)
     local sliderW = centerW - 60
 
     local lookHdr = C:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    lookHdr:SetPoint("TOPLEFT", 20, -12); lookHdr:SetText("Size and Look"); lookHdr:SetTextColor(1, 0.82, 0)
+    lookHdr:SetPoint("TOPLEFT", 20, -12); lookHdr:SetText(L["Size and Look"]); lookHdr:SetTextColor(1, 0.82, 0)
 
     -- 6. Width Slider
     local WidthSlider = CreateFrame("Slider", "SGJ_XPWidthSlider", C, "OptionsSliderTemplate")
@@ -1272,11 +1273,11 @@ local function BuildXPOptionsTab(parent)
     WidthSlider:SetPoint("TOPLEFT", lookHdr, "BOTTOMLEFT", 10, -34)
     WidthSlider:SetMinMaxValues(100, 1000); WidthSlider:SetValueStep(5); WidthSlider:SetObeyStepOnDrag(true)
     _G[WidthSlider:GetName() .. 'Low']:SetText('100'); _G[WidthSlider:GetName() .. 'High']:SetText('1000')
-    _G[WidthSlider:GetName() .. 'Text']:SetText('Bar Width: ' .. SGJ_XP_DB.XPBarWidth .. 'px')
+    _G[WidthSlider:GetName() .. 'Text']:SetText(string.format(L["Bar Width: %spx"], SGJ_XP_DB.XPBarWidth))
     WidthSlider:SetValue(SGJ_XP_DB.XPBarWidth)
 
     WidthSlider:SetScript("OnValueChanged", function(self, value)
-        _G[self:GetName() .. 'Text']:SetText('Bar Width: ' .. value .. 'px')
+        _G[self:GetName() .. 'Text']:SetText(string.format(L["Bar Width: %spx"], value))
         if SGJ_ExperienceBar then
             SGJ_ExperienceBar:SetWidth(value)
             UpdateTicks() -- Redraw the brackets so they space out evenly!
@@ -1290,11 +1291,11 @@ local function BuildXPOptionsTab(parent)
     HeightSlider:SetPoint("TOPLEFT", WidthSlider, "BOTTOMLEFT", 0, -40)
     HeightSlider:SetMinMaxValues(5, 50); HeightSlider:SetValueStep(1); HeightSlider:SetObeyStepOnDrag(true)
     _G[HeightSlider:GetName() .. 'Low']:SetText('5'); _G[HeightSlider:GetName() .. 'High']:SetText('50')
-    _G[HeightSlider:GetName() .. 'Text']:SetText('Bar Height: ' .. SGJ_XP_DB.XPBarHeight .. 'px')
+    _G[HeightSlider:GetName() .. 'Text']:SetText(string.format(L["Bar Height: %spx"], SGJ_XP_DB.XPBarHeight))
     HeightSlider:SetValue(SGJ_XP_DB.XPBarHeight)
 
     HeightSlider:SetScript("OnValueChanged", function(self, value)
-        _G[self:GetName() .. 'Text']:SetText('Bar Height: ' .. value .. 'px')
+        _G[self:GetName() .. 'Text']:SetText(string.format(L["Bar Height: %spx"], value))
         if SGJ_ExperienceBar then
             SGJ_ExperienceBar:SetHeight(value)
             UpdateTicks() -- Make the bracket lines stretch to fit the new height
@@ -1308,11 +1309,11 @@ local function BuildXPOptionsTab(parent)
     OpacitySlider:SetPoint("TOPLEFT", HeightSlider, "BOTTOMLEFT", 0, -40)
     OpacitySlider:SetMinMaxValues(0, 1); OpacitySlider:SetValueStep(0.1); OpacitySlider:SetObeyStepOnDrag(true)
     _G[OpacitySlider:GetName() .. 'Low']:SetText('0%'); _G[OpacitySlider:GetName() .. 'High']:SetText('100%')
-    _G[OpacitySlider:GetName() .. 'Text']:SetText('Background Opacity: ' .. (SGJ_XP_DB.BgOpacity * 100) .. '%')
+    _G[OpacitySlider:GetName() .. 'Text']:SetText(string.format(L["Background Opacity: %s%%"], SGJ_XP_DB.BgOpacity * 100))
     OpacitySlider:SetValue(SGJ_XP_DB.BgOpacity)
 
     OpacitySlider:SetScript("OnValueChanged", function(self, value)
-        _G[self:GetName() .. 'Text']:SetText('Background Opacity: ' .. (value * 100) .. '%')
+        _G[self:GetName() .. 'Text']:SetText(string.format(L["Background Opacity: %s%%"], value * 100))
         if SGJ_ExperienceBar then SGJ_ExperienceBar:SetBackdropColor(0, 0, 0, value) end
         SGJ_XP_DB.BgOpacity = value
     end)
@@ -1354,17 +1355,17 @@ local function BuildXPOptionsTab(parent)
 
     -- Colours, one list under the sliders
     local colorHdr = C:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    colorHdr:SetPoint("TOPLEFT", OpacitySlider, "BOTTOMLEFT", -10, -30); colorHdr:SetText("Colors"); colorHdr:SetTextColor(1, 0.82, 0)
-    local cNormal = CreateColorSwatch("Normal Bar Color", "NormalColor", colorHdr, 2, -12, UpdateBar)
-    local cRested = CreateColorSwatch("Rested Bar Color", "RestedColor", cNormal, 0, -12, UpdateBar)
-    local cQuest = CreateColorSwatch("Quest Turn-In Color", "QuestColor", cRested, 0, -12, UpdateBar)
-    local cTicks = CreateColorSwatch("Milestone Ticks", "TickColor", cQuest, 0, -12, UpdateTicks)
-    CreateColorSwatch("Text Color", "TextColor", cTicks, 0, -12, UpdateBar)
+    colorHdr:SetPoint("TOPLEFT", OpacitySlider, "BOTTOMLEFT", -10, -30); colorHdr:SetText(L["Colors"]); colorHdr:SetTextColor(1, 0.82, 0)
+    local cNormal = CreateColorSwatch(L["Normal Bar Color"], "NormalColor", colorHdr, 2, -12, UpdateBar)
+    local cRested = CreateColorSwatch(L["Rested Bar Color"], "RestedColor", cNormal, 0, -12, UpdateBar)
+    local cQuest = CreateColorSwatch(L["Quest Turn-In Color"], "QuestColor", cRested, 0, -12, UpdateBar)
+    local cTicks = CreateColorSwatch(L["Milestone Ticks"], "TickColor", cQuest, 0, -12, UpdateTicks)
+    CreateColorSwatch(L["Text Color"], "TextColor", cTicks, 0, -12, UpdateBar)
 
     -- ==========================================
     -- RIGHT: GEAR JUDGE INTEGRATION
     -- ==========================================
-    local rightSub = Header(R, "Gear Judge Integration", "Gear hints on the XP bar and at level-up.")
+    local rightSub = Header(R, L["Gear Judge Integration"], L["Gear hints on the XP bar and at level-up."])
 
     local function CreateGearToggle(label, dbKey, anchor, onChange)
         return Check(R, label, SGJ_XP_DB[dbKey], anchor, function(self)
@@ -1373,10 +1374,10 @@ local function BuildXPOptionsTab(parent)
         end)
     end
 
-    local UnlocksBox = CreateGearToggle("Show Level-Locked Upgrades", "ShowUnlocks", rightSub, UpdateBar)
-    local DingBox = CreateGearToggle("Level-Up Gear Alert", "DingAlert", UnlocksBox)
-    local BandBox = CreateGearToggle("Warn Before Weights Change", "ShowBandWarning", DingBox)
-    CreateGearToggle("Show Quest Turn-In Projection", "ShowQuestProjection", BandBox, UpdateBar)
+    local UnlocksBox = CreateGearToggle(L["Show Level-Locked Upgrades"], "ShowUnlocks", rightSub, UpdateBar)
+    local DingBox = CreateGearToggle(L["Level-Up Gear Alert"], "DingAlert", UnlocksBox)
+    local BandBox = CreateGearToggle(L["Warn Before Weights Change"], "ShowBandWarning", DingBox)
+    CreateGearToggle(L["Show Quest Turn-In Projection"], "ShowQuestProjection", BandBox, UpdateBar)
 
     _G.MSC.ViewXPTracker = f
 end
@@ -1388,7 +1389,7 @@ TabInjector:SetScript("OnEvent", function()
     if _G.MSC and _G.MSC.RegisterPluginTab then
         -- Adds a 5th button to your main sidebar!
         _G.MSC.RegisterPluginTab(
-            "XP Tracker",                                   -- Hover text for the sidebar button
+            L["XP Tracker"],                                -- Hover text for the sidebar button
             "Interface\\Icons\\Spell_Holy_MagicalSentry",   -- Uses the cool purple magic eye icon
             BuildXPOptionsTab,                              -- The function we just wrote above
             "ViewXPTracker"                                 -- The string key linking to the frame

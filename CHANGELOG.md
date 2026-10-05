@@ -1,5 +1,10 @@
 # Sharpie's Gear Judge - XP Bar (Changelog)
 ---
+## 🚀 v1.1.3
+### 🌍 Translations
+- **Translated**: The XP Bar is now translated into every language WoW Forever launches with: German, Spanish (Spain and Latin America), French, Brazilian Portuguese, Russian, Korean and Traditional Chinese.
+
+---
 ## 🚀 v1.1.2
 ### 🖼️ Options Redesigned for the Bigger Window
 - Gear Judge 3.2.0 makes the main window wider, and the XP Tracker options now sit in three columns: what the bar shows and when (left), size, opacity and colours (middle), and Gear Judge Integration (right).
