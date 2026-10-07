@@ -1,14 +1,23 @@
-# Sharpie's Gear Judge - XP Bar (Changelog)
----
+# Sharpie's Gear Judge [XP Bar] - Version History
+
 ## 🚀 v1.1.3
+
 ### 🌍 Translations
 - **Translated**: The XP Bar is now translated into every language WoW Forever launches with: German, Spanish (Spain and Latin America), French, Brazilian Portuguese, Russian, Korean and Traditional Chinese.
 
 ### ⚡ Performance
 - **Lighter Stats Box**: The stats box redraws every second to keep the session timer ticking, and it re-laid out every line each time. Now only the lines that changed are redrawn (usually just the session time).
 
+### 🐛 Bug Fixes
+- **Fixed: Auto-Hide During Combat Didn't Stay Hidden**: Every XP gain in combat brought the bar and stats box back. They now stay hidden until combat ends and reappear afterwards.
+- **Fixed: Korean Kill Tracking**: On Korean clients kills were never counted, because the kill message contains grammar markers the tracker didn't understand. Kill XP messages now match in every language.
+- **Fixed: Opacity Slider and Stats Box**: The Background Opacity slider changed only the bar; it now changes the stats box too.
+- **Fixed: Characters With the Same First Name**: WoW Forever names have two parts, and characters sharing a first name shared one gear score history. Each character now keeps its own.
+
 ---
+
 ## 🚀 v1.1.2
+
 ### 🖼️ Options Redesigned for the Bigger Window
 - Gear Judge 3.2.0 makes the main window wider, and the XP Tracker options now sit in three columns: what the bar shows and when (left), size, opacity and colours (middle), and Gear Judge Integration (right).
 - The width, height and opacity sliders are wider, so they are easier to set precisely.
@@ -17,10 +26,12 @@
 - **Fixed: Quest Turn-In Projection Never Showed on Forever**: Forever uses the modern quest log functions and has none of the classic ones (`GetQuestLogTitle`, `SelectQuestLogEntry`), so the scan for ready quests stopped before it started: no projection on the bar, no quest-colour section, and no upgrade count for quest rewards. The scan now uses the modern quest log when the game has it, and the classic one otherwise.
 - **Fixed: Colour Swatches Showed White**: The swatch frame was drawn on top of the colour, so each swatch looked white with a thin coloured rim. The colour now fills the box.
 ## 🚀 v1.1.1
+
 ### 🐛 Bug Fixes
 - **Loads on WoW Forever**: The Forever client reads the plain `.toc` file, which only listed the TBC client, so the XP Bar showed as Incompatible. It now lists both.
 
 ## 🚀 v1.0.1
+
 ### ⚔️ Gear Judge Integration
 - **Upgrades Waiting in Your Bags**: Scans your bags for items SGJ rates as upgrades but that you're too low level to equip. The tooltip lists them by unlock level, and when one unlocks at the next level its icon sits at the end of the bar.
 - **Level-Up Gear Alert**: On level-up, a "Ding!" alert lists the bag upgrades you can now equip (also printed to chat as clickable links) and any unspent talent points. Left-click opens your bags; right-click dismisses it.
@@ -44,6 +55,7 @@
 - **Cleanup**: Removed the unused `L1`-`L7` stats-box font strings and the duplicate drag handlers.
 
 ## 🚀 v1.0.0
+
 ### ✨ Features & Updates
 - **Rested XP UI Updates**: Upgraded the visual tracking of the experience bar. The bar now draws a classic, translucent blue "tail" extending outward to show exactly where your rested XP ends.
 - **Rested Tooltips**: Added exact Rested XP mathematical data directly into the tooltip when hovering over the experience bar.

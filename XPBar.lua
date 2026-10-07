@@ -40,7 +40,15 @@ local function IsAtMaxLevel()
     return UnitLevel("player") >= GetMaxLevel()
 end
 
+-- Full name (WoW Forever names have two parts; UnitName gives only the first).
 local function GetCharKey()
+    local MSC = _G.MSC
+    if MSC and MSC.GetPlayerKey and MSC.GetCharacterName then return MSC:GetPlayerKey() end
+    return (UnitName("player") or "?") .. "-" .. (GetRealmName() or "?")
+end
+
+-- The pre-fix key (first name only), so existing data carries over once.
+local function LegacyCharKey()
     return (UnitName("player") or "?") .. "-" .. (GetRealmName() or "?")
 end
 
@@ -59,6 +67,12 @@ local function FormatToPattern(fmt)
     local p = fmt:gsub("([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1")
     p = p:gsub("%%%%%d%%%$s", "(.-)"):gsub("%%%%%d%%%$d", "(%%d+)") -- Positional (%1$s)
     p = p:gsub("%%%%s", "(.-)"):gsub("%%%%d", "(%%d+)")
+    -- Grammar tokens the game resolves when it prints the message: koKR particles
+    -- ("|1이;가;", "|4을;를;") and plurals ("|4experience:experiences;"). The printed
+    -- text holds only one of the forms, so the token becomes a wildcard (right
+    -- after a captured name it is simply dropped, so the name takes the particle).
+    p = p:gsub("%(%.%-%)|%d[^;:|]*;[^;|]*;", "(.-)"):gsub("%(%.%-%)|%d[^;|]*;", "(.-)")
+    p = p:gsub("|%d[^;:|]*;[^;|]*;", ".-"):gsub("|%d[^;|]*;", ".-")
     return "^" .. p
 end
 
@@ -594,6 +608,15 @@ local function RefreshGearScore()
     -- Per-level log. Re-baselines when the weight profile changes so the delta never compares two scales.
     SGJ_XP_DB.ScoreLog = SGJ_XP_DB.ScoreLog or {}
     local charKey = GetCharKey()
+    local legacy = LegacyCharKey()
+    if not SGJ_XP_DB.ScoreLog[charKey] and legacy ~= charKey and SGJ_XP_DB.ScoreLog[legacy] then
+        -- copy the log saved under the old first-name key (several characters may share it)
+        local copy = {}
+        for lvl, e in pairs(SGJ_XP_DB.ScoreLog[legacy]) do
+            copy[lvl] = type(e) == "table" and { start = e.start, last = e.last, spec = e.spec } or e
+        end
+        SGJ_XP_DB.ScoreLog[charKey] = copy
+    end
     SGJ_XP_DB.ScoreLog[charKey] = SGJ_XP_DB.ScoreLog[charKey] or {}
     local level = UnitLevel("player")
     local entry = SGJ_XP_DB.ScoreLog[charKey][level]
@@ -839,6 +862,15 @@ end
 
 -- Updates the Visual Bar
 local function UpdateBar()
+    -- Auto-Hide During Combat: XP updates mid-fight must not bring the bar
+    -- back; PLAYER_REGEN_ENABLED calls this again once combat ends
+    if SGJ_XP_DB.HideInCombat and InCombatLockdown() then
+        SGJ_XP:Hide()
+        SGJ_XP.Unlock:Hide()
+        SGJ_Stats:Hide()
+        return
+    end
+
     UpdateStatsBox() -- Ensure the box always updates alongside the bar
 
     if IsAtMaxLevel() or not SGJ_XP_DB.ShowXPBar then
@@ -1326,6 +1358,7 @@ local function BuildXPOptionsTab(parent)
     OpacitySlider:SetScript("OnValueChanged", function(self, value)
         _G[self:GetName() .. 'Text']:SetText(string.format(L["Background Opacity: %s%%"], value * 100))
         if SGJ_ExperienceBar then SGJ_ExperienceBar:SetBackdropColor(0, 0, 0, value) end
+        if SGJ_Stats then SGJ_Stats:SetBackdropColor(0, 0, 0, value) end
         SGJ_XP_DB.BgOpacity = value
     end)
 
