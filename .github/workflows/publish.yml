@@ -25,4 +25,4 @@ jobs:
           args: -p 1703196
         env:
           CF_API_KEY: ${{ secrets.CURSEFORGE_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
