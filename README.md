@@ -1,6 +1,6 @@
 # Sharpie's Gear Judge - XP Bar
 
-**Version 1.1.4** | Requires **Sharpie's Gear Judge** | Works on **WoW Forever**, **Classic Era** and **TBC Anniversary**
+**Version 1.1.3** | Requires **Sharpie's Gear Judge** | Works on **WoW Forever**, **Classic Era** and **TBC Anniversary**
 
 A lightweight, gear-aware experience bar plugin built for **Sharpie's Gear Judge (SGJ)**.
 
