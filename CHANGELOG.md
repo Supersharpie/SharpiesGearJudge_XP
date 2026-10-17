@@ -1,5 +1,9 @@
 # Sharpie's Gear Judge [XP Bar] - Version History
 
+## 🚀 v1.1.4
+
+---
+
 ## 🚀 v1.1.3
 
 ### 🌍 Translations
