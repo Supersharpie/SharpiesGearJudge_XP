@@ -2,6 +2,9 @@
 
 ## 🚀 v1.1.4
 
+### 🎨 New Look
+- Matches Gear Judge's new window: colored section titles, slimmer bars and your class color as the accent.
+
 ---
 
 ## 🚀 v1.1.3

@@ -1217,20 +1217,29 @@ local function BuildXPOptionsTab(parent)
     R:SetPoint("TOPRIGHT"); R:SetPoint("BOTTOMRIGHT"); R:SetWidth(XP_RIGHT_W)
     local C = CreateFrame("Frame", nil, f)
     C:SetPoint("TOPLEFT", LeftCol, "TOPRIGHT"); C:SetPoint("BOTTOMRIGHT", R, "BOTTOMLEFT")
+    -- Theme from the core when present, else the old gold/grey look
+    local T = _G.MSC and _G.MSC.Theme
+    local TEXT, MUTED = (T and T.Text) or {0.9, 0.9, 0.9}, (T and T.Muted) or {0.6, 0.6, 0.6}
+    local function Heading(fs, color, width)
+        if _G.MSC and _G.MSC.StyleHeading and T then _G.MSC.StyleHeading(fs, color, width) else fs:SetTextColor(1, 0.82, 0) end
+    end
+    local HGAP = T and -8 or -3 -- room for the heading underline
+
     for _, col in ipairs({ LeftCol, R }) do
-        local shade = col:CreateTexture(nil, "BACKGROUND"); shade:SetAllPoints(); shade:SetColorTexture(0, 0, 0, 0.25)
+        local shade = col:CreateTexture(nil, "BACKGROUND"); shade:SetAllPoints()
+        if T then shade:SetColorTexture(T.Panel[1], T.Panel[2], T.Panel[3], 0.5) else shade:SetColorTexture(0, 0, 0, 0.25) end
     end
     local function Divider(col, side)
-        local t = col:CreateTexture(nil, "BORDER"); t:SetColorTexture(1, 1, 1, 0.08); t:SetWidth(1)
+        local t = col:CreateTexture(nil, "BORDER"); t:SetColorTexture(unpack((T and T.Edge) or {1, 1, 1, 0.08})); t:SetWidth(1)
         t:SetPoint("TOP" .. side, 0, 0); t:SetPoint("BOTTOM" .. side, 0, 0)
     end
     Divider(LeftCol, "RIGHT"); Divider(R, "LEFT")
 
-    local function Header(parentCol, text, sub)
+    local function Header(parentCol, text, sub, color)
         local h = parentCol:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        h:SetPoint("TOPLEFT", 14, -12); h:SetText(text); h:SetTextColor(1, 0.82, 0)
+        h:SetPoint("TOPLEFT", 14, -12); h:SetText(text); Heading(h, color, parentCol:GetWidth() - 28)
         local s = parentCol:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        s:SetPoint("TOPLEFT", h, "BOTTOMLEFT", 0, -3); s:SetText(sub); s:SetTextColor(0.6, 0.6, 0.6)
+        s:SetPoint("TOPLEFT", h, "BOTTOMLEFT", 0, HGAP); s:SetText(sub); s:SetTextColor(unpack(MUTED))
         s:SetWidth(parentCol:GetWidth() - 28); s:SetJustifyH("LEFT")
         return s
     end
@@ -1239,7 +1248,7 @@ local function BuildXPOptionsTab(parent)
     local function Check(parentCol, label, checked, anchor, onClick)
         local box = CreateFrame("CheckButton", nil, parentCol, "ChatConfigCheckButtonTemplate")
         box:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -10)
-        box.Text:SetText(label); box.Text:SetTextColor(0.9, 0.9, 0.9)
+        box.Text:SetText(label); box.Text:SetTextColor(unpack(TEXT))
         box.Text:SetWidth(parentCol:GetWidth() - 60); box.Text:SetJustifyH("LEFT")
         box:SetChecked(checked)
         box:SetScript("OnClick", onClick)
@@ -1249,7 +1258,7 @@ local function BuildXPOptionsTab(parent)
     -- ==========================================
     -- LEFT: BAR AND DISPLAY
     -- ==========================================
-    local leftSub = Header(LeftCol, L["Experience Tracker"], L["What the XP bar shows and when."])
+    local leftSub = Header(LeftCol, L["Experience Tracker"], L["What the XP bar shows and when."], "Gold")
 
     -- 1. Lock Checkbox
     local LockBox = Check(LeftCol, L["Lock Frames"], SGJ_XP_DB.XPBarLocked, leftSub,
@@ -1308,7 +1317,7 @@ local function BuildXPOptionsTab(parent)
     local sliderW = centerW - 60
 
     local lookHdr = C:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    lookHdr:SetPoint("TOPLEFT", 20, -12); lookHdr:SetText(L["Size and Look"]); lookHdr:SetTextColor(1, 0.82, 0)
+    lookHdr:SetPoint("TOPLEFT", 20, -12); lookHdr:SetText(L["Size and Look"]); Heading(lookHdr, "Blue", centerW - 40)
 
     -- 6. Width Slider
     local WidthSlider = CreateFrame("Slider", "SGJ_XPWidthSlider", C, "OptionsSliderTemplate")
@@ -1362,6 +1371,14 @@ local function BuildXPOptionsTab(parent)
         SGJ_XP_DB.BgOpacity = value
     end)
 
+    -- Slider labels in theme text, range ends muted
+    if T then
+        for _, s in ipairs({ WidthSlider, HeightSlider, OpacitySlider }) do
+            local n = s:GetName()
+            _G[n .. 'Text']:SetTextColor(unpack(TEXT)); _G[n .. 'Low']:SetTextColor(unpack(MUTED)); _G[n .. 'High']:SetTextColor(unpack(MUTED))
+        end
+    end
+
 	-- Helper function to create uniform color buttons
     local function CreateColorSwatch(name, dbKey, anchorFrame, xOff, yOff, updateAction)
         local btn = CreateFrame("Button", nil, C)
@@ -1378,10 +1395,11 @@ local function BuildXPOptionsTab(parent)
         btn.Border:SetTexture("Interface\\ChatFrame\\ChatFrameColorSwatch")
         btn.Border:SetPoint("CENTER")
         btn.Border:SetSize(24, 24)
+        if T then btn.Border:SetColorTexture(T.Edge[1], T.Edge[2], T.Edge[3], 0.35); btn.Border:SetSize(18, 18) end -- flat 1px frame round the colour
 
         btn.Text = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         btn.Text:SetPoint("LEFT", btn, "RIGHT", 5, 0)
-        btn.Text:SetText(name)
+        btn.Text:SetText(name); if T then btn.Text:SetTextColor(unpack(TEXT)) end
 
         btn:SetScript("OnClick", function()
             local r, g, b, a = unpack(SGJ_XP_DB[dbKey])
@@ -1399,8 +1417,8 @@ local function BuildXPOptionsTab(parent)
 
     -- Colours, one list under the sliders
     local colorHdr = C:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    colorHdr:SetPoint("TOPLEFT", OpacitySlider, "BOTTOMLEFT", -10, -30); colorHdr:SetText(L["Colors"]); colorHdr:SetTextColor(1, 0.82, 0)
-    local cNormal = CreateColorSwatch(L["Normal Bar Color"], "NormalColor", colorHdr, 2, -12, UpdateBar)
+    colorHdr:SetPoint("TOPLEFT", OpacitySlider, "BOTTOMLEFT", -10, -30); colorHdr:SetText(L["Colors"]); Heading(colorHdr, "Purple", centerW - 40)
+    local cNormal = CreateColorSwatch(L["Normal Bar Color"], "NormalColor", colorHdr, 2, HGAP - 9, UpdateBar)
     local cRested = CreateColorSwatch(L["Rested Bar Color"], "RestedColor", cNormal, 0, -12, UpdateBar)
     local cQuest = CreateColorSwatch(L["Quest Turn-In Color"], "QuestColor", cRested, 0, -12, UpdateBar)
     local cTicks = CreateColorSwatch(L["Milestone Ticks"], "TickColor", cQuest, 0, -12, UpdateTicks)
@@ -1409,7 +1427,7 @@ local function BuildXPOptionsTab(parent)
     -- ==========================================
     -- RIGHT: GEAR JUDGE INTEGRATION
     -- ==========================================
-    local rightSub = Header(R, L["Gear Judge Integration"], L["Gear hints on the XP bar and at level-up."])
+    local rightSub = Header(R, L["Gear Judge Integration"], L["Gear hints on the XP bar and at level-up."], "Green")
 
     local function CreateGearToggle(label, dbKey, anchor, onChange)
         return Check(R, label, SGJ_XP_DB[dbKey], anchor, function(self)
