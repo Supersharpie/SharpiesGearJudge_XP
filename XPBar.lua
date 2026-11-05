@@ -408,7 +408,8 @@ local function GetUpgradeDelta(link, weights, specKey, assumeUsable)
     local compSlot = MSC.GetComparisonSlot(link, equipLoc, weights, specKey)
     if not compSlot then return nil end
     local newScore, oldScore = MSC:EvaluateUpgrade(link, compSlot, weights, specKey)
-    if newScore and oldScore and newScore > (oldScore + 0.1) then
+    -- the core's upgrade threshold (the tooltip's), 0.01 if the core predates it
+    if newScore and oldScore and newScore > (oldScore + (MSC.VERDICT_EPS or 0.01)) then
         return newScore - oldScore
     end
     return nil

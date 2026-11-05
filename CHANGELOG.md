@@ -1,5 +1,12 @@
 # Sharpie's Gear Judge [XP Bar] - Version History
 
+## 🚀 v1.1.5
+
+### 🐛 Fixes
+- Small upgrades now count as upgrades, the same as on Gear Judge's tooltip (they needed more than +0.1).
+
+---
+
 ## 🚀 v1.1.4
 
 ### 🎨 New Look
