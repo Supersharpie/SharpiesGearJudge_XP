@@ -1047,6 +1047,7 @@ end)
 -- Main Event Router
 SGJ_XP:RegisterEvent("ADDON_LOADED")
 SGJ_XP:RegisterEvent("PLAYER_ENTERING_WORLD")
+SGJ_XP:RegisterEvent("PLAYER_LOGOUT")
 SGJ_XP:RegisterEvent("PLAYER_XP_UPDATE")
 SGJ_XP:RegisterEvent("PLAYER_LEVEL_UP")
 SGJ_XP:RegisterEvent("UPDATE_EXHAUSTION")
@@ -1109,10 +1110,21 @@ SGJ_XP:SetScript("OnEvent", function(self, event, ...)
         end
 
     elseif event == "PLAYER_ENTERING_WORLD" then
-        -- Fires on every loading screen; only the first one starts the session
+        -- Fires on every loading screen; only the first one starts the session.
+        -- After a /reload, carry on the session saved at the reload (same character only).
         if not sessionStarted then
             sessionStarted = true
             sessionStartTime = GetTime()
+            local _, isReload = ...
+            local saved = SGJ_XP_DB and SGJ_XP_DB.ReloadSession
+            if isReload and type(saved) == "table" and saved.guid == UnitGUID("player")
+                and type(saved.start) == "number" and saved.start <= GetTime() then
+                sessionStartTime = saved.start
+                totalXPGainedSession = saved.xp or 0
+                killCount, killXPTotal, killBaseXPTotal = saved.kills or 0, saved.killXP or 0, saved.killBaseXP or 0
+                questCount, questXPTotal = saved.quests or 0, saved.questXP or 0
+            end
+            if SGJ_XP_DB then SGJ_XP_DB.ReloadSession = nil end
         end
         lastXP = UnitXP("player") or 0
         lastMaxXP = UnitXPMax("player") or 1
@@ -1122,6 +1134,16 @@ SGJ_XP:SetScript("OnEvent", function(self, event, ...)
         -- Give the main addon time to detect the spec before scoring
         Debounce("gear", 3, RefreshGearData)
         Debounce("quests", 3, RefreshQuestData)
+
+    elseif event == "PLAYER_LOGOUT" then
+        -- Also fires on /reload; only a reload reads this back (see PLAYER_ENTERING_WORLD)
+        if SGJ_XP_DB and sessionStarted then
+            SGJ_XP_DB.ReloadSession = {
+                guid = UnitGUID("player"), start = sessionStartTime, xp = totalXPGainedSession,
+                kills = killCount, killXP = killXPTotal, killBaseXP = killBaseXPTotal,
+                quests = questCount, questXP = questXPTotal,
+            }
+        end
 
     elseif event == "PLAYER_XP_UPDATE" then
         TrackXPGains()

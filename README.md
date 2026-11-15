@@ -1,6 +1,6 @@
 # Sharpie's Gear Judge - XP Bar
 
-**Version 1.1.5** | Requires **Sharpie's Gear Judge** | Works on **WoW Forever**, **Classic Era** and **TBC Anniversary**
+**Version 1.1.6** | Requires **Sharpie's Gear Judge** | Works on **WoW Forever**, **Classic Era** and **TBC Anniversary**
 
 A lightweight, gear-aware experience bar plugin built for **Sharpie's Gear Judge (SGJ)**.
 
@@ -9,7 +9,7 @@ A lightweight, gear-aware experience bar plugin built for **Sharpie's Gear Judge
 - **Dynamic Tracking**: Tracks your current experience, with optional milestone ticks or classic 20-segment brackets.
 - **Classic Rested Tail**: A translucent blue "tail" beyond your current XP shows exactly where your Rested XP ends.
 - **Precision Tooltips**: Hover the bar for current XP, XP remaining, Rested XP (how much of the level it covers and roughly how many kills it lasts), and session stats: session time, XP per hour, estimated time to level, and kill and quest XP.
-- **Standalone Stats Box**: Optionally show everything from the tooltip in a box of its own. Shift-click it to reset the session.
+- **Standalone Stats Box**: Optionally show everything from the tooltip in a box of its own. Shift-click it to reset the session. The session carries on through a `/reload`; logging in starts a new one.
 - **Native Integration**: Ties into the core SharpiesGearJudge addon for a cohesive HUD experience.
 
 ### ⚔️ Gear-Aware Leveling

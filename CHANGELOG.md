@@ -1,5 +1,12 @@
 # Sharpie's Gear Judge [XP Bar] - Version History
 
+## 🚀 v1.1.6
+
+### 🐛 Fixes
+- The session (time, XP per hour, kills and quests) now carries on through a `/reload`. Logging in still starts a new one.
+
+---
+
 ## 🚀 v1.1.5
 
 ### 🐛 Fixes
