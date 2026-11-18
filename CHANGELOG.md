@@ -1,5 +1,14 @@
 # Sharpie's Gear Judge [XP Bar] - Version History
 
+## 🚀 v1.1.7
+
+### 🐛 Fixes
+- WoW Forever: the stat weight warning listed stats you already value as "now valued". Forever's weights change a little every level, so it no longer warns about a step that isn't there.
+- The warning's weights are rounded to two decimals.
+- The gear score gain for the level counts only item changes, not weights that moved with your gear or talents.
+
+---
+
 ## 🚀 v1.1.6
 
 ### 🐛 Fixes

@@ -497,13 +497,34 @@ local function GetUpcomingBandShift()
     if not nextKey then return nil end
 
     local cur, nxt = cls.LevelingWeights[specKey], cls.LevelingWeights[nextKey]
+    -- WoW Forever: weights follow per-level curves, and a band row is only the curve at the band's first
+    -- level. Compare the weights in use now with the next band's at its first level (MSC:GetLevelingRow
+    -- holds the level inside each band), and skip a band that only continues the same curve: nothing
+    -- steps there. Small moves are left out (2026-11-16: a level 9 Rogue read "Spirit: now valued").
+    local minRel = 0
+    if MSC.IsForever and cls.LevelingCurves and MSC.GetLevelingRow then
+        local function CurveOf(key)
+            local role = key:match("^(.-)_%d+_%d+$")
+            if not role then return nil end
+            local alias = MSC.LevelingCurveAlias and MSC.LevelingCurveAlias[role]
+            return cls.LevelingCurves[role] or (alias and cls.LevelingCurves[alias])
+        end
+        local c1, c2 = CurveOf(specKey), CurveOf(nextKey)
+        if c1 and c1 == c2 then return nil end
+        local okA, a = pcall(MSC.GetLevelingRow, MSC, cls, specKey)
+        local okB, b = pcall(MSC.GetLevelingRow, MSC, cls, nextKey)
+        if okA and type(a) == "table" then cur = a end
+        if okB and type(b) == "table" then nxt = b end
+        minRel = 0.1
+    end
     local changes, seen = {}, {}
     local function Compare(stat)
         if seen[stat] then return end
         seen[stat] = true
-        local a, b = cur[stat] or 0, nxt[stat] or 0
-        if a ~= b then
-            table.insert(changes, { stat = stat, from = a, to = b, rel = math.abs(b - a) / math.max(a, b) })
+        local a, b = tonumber(cur[stat]) or 0, tonumber(nxt[stat]) or 0
+        local rel = (a ~= b) and math.abs(b - a) / math.max(math.abs(a), math.abs(b)) or 0
+        if a ~= b and rel >= minRel then
+            table.insert(changes, { stat = stat, from = a, to = b, rel = rel })
         end
     end
     for stat in pairs(cur) do Compare(stat) end
@@ -515,12 +536,18 @@ local function GetUpcomingBandShift()
     return { levelsAway = levelsAway, level = hi + 1, name = pretty, changes = changes }
 end
 
+-- Two decimals, trailing zeros dropped (0.85548 -> "0.86", 2.0 -> "2")
+local function FormatWeight(v)
+    local s = string.format("%.2f", v):gsub("0+$", ""):gsub("%.$", "")
+    return s
+end
+
 local function FormatWeightChange(c)
     local name = _G.MSC.GetCleanStatName(c.stat)
     if c.to == 0 then return string.format(L["%s: |cffff5555no longer valued|r"], name) end
-    if c.from == 0 then return string.format(L["%s: |cff55ff55now valued|r (%s)"], name, c.to) end
+    if c.from == 0 then return string.format(L["%s: |cff55ff55now valued|r (%s)"], name, FormatWeight(c.to)) end
     local color = (c.to > c.from) and "|cff55ff55" or "|cffff5555"
-    return string.format("%s: %s -> %s%s|r", name, c.from, color, c.to)
+    return string.format("%s: %s -> %s%s|r", name, FormatWeight(c.from), color, FormatWeight(c.to))
 end
 
 -- Sums completed quests in the log: XP (when the client exposes it) and rewards SGJ judges as upgrades.
@@ -625,6 +652,20 @@ local function RefreshGearScore()
         entry = { start = score, spec = specKey }
         SGJ_XP_DB.ScoreLog[charKey][level] = entry
     end
+    -- The gear worn when the level started (2026-11-16): Forever's weights also move with the worn gear
+    -- and with talent points, so the start score is re-scored with today's weights and only item
+    -- swaps count. Kept for the current level only.
+    if not entry.gear then
+        entry.gear = {}
+        for slot, link in pairs(MSC:GetEquippedGear()) do entry.gear[slot] = link end
+        for lvl, e in pairs(SGJ_XP_DB.ScoreLog[charKey]) do
+            if lvl ~= level and type(e) == "table" then e.gear = nil end
+        end
+    end
+    local okStart, startScore = pcall(function()
+        return MSC:GetCachedCharacterScore(entry.gear, weights, specKey, entry.gear)
+    end)
+    entry.startNow = okStart and startScore or nil
     entry.last = score
 end
 
@@ -632,7 +673,7 @@ local function GetGearScoreGainThisLevel()
     local log = SGJ_XP_DB.ScoreLog and SGJ_XP_DB.ScoreLog[GetCharKey()]
     local entry = log and log[UnitLevel("player")]
     if not entry or not entry.last then return 0 end
-    return entry.last - entry.start
+    return entry.last - (entry.startNow or entry.start)
 end
 
 -- Calculates all tracking math so both the tooltip and the Box can use it
