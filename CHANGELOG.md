@@ -1,5 +1,12 @@
 # Sharpie's Gear Judge [XP Bar] - Version History
 
+## 🚀 v1.1.8
+
+### 🐛 Fixes
+- WoW Forever: your XP history no longer looks reset on logins where the game gives no realm name (needs Gear Judge 3.7.0).
+
+---
+
 ## 🚀 v1.1.7
 
 ### 🐛 Fixes
